@@ -1,11 +1,10 @@
-// Removed vite/client reference to avoid build errors
+// Reference to vite/client removed to fix "Cannot find type definition file" error
 // /// <reference types="vite/client" />
 
-interface ImportMetaEnv {
-  // readonly VITE_GOOGLE_API_KEY: string;
-  // Add other env vars here if needed
-}
-
-interface ImportMeta {
-  readonly env: ImportMetaEnv;
-}
+// Define process.env since it is used in the app via DefinePlugin in vite.config.ts
+declare const process: {
+  env: {
+    API_KEY: string;
+    [key: string]: string | undefined;
+  }
+};
