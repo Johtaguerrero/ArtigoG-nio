@@ -35,10 +35,13 @@ async function retryWithBackoff<T>(
       error?.code === 429 || 
       (error?.message && error.message.includes('429')) ||
       (error?.message && error.message.includes('quota')) ||
-      (error?.status === 'RESOURCE_EXHAUSTED');
+      (error?.status === 'RESOURCE_EXHAUSTED') ||
+      (error?.status === 503) || 
+      (error?.message && error.message.includes('overloaded')) ||
+      (error?.message && error.message.includes('UNAVAILABLE'));
 
     if (retries > 0 && isRateLimit) {
-      console.warn(`Quota limit hit. Retrying in ${delay}ms... (${retries} retries left)`);
+      console.warn(`Serviço ocupado (Quota/Overload). Tentando novamente em ${delay}ms... (${retries} tentativas restantes)`);
       await new Promise(resolve => setTimeout(resolve, delay));
       return retryWithBackoff(fn, retries - 1, delay * factor, factor);
     }
@@ -171,7 +174,8 @@ export const generateMainContent = async (
   wordCount: string,
   options: AdvancedOptions,
   language: string,
-  siteUrl?: string
+  siteUrl?: string,
+  authorName?: string
 ): Promise<string> => {
   
   const ai = getClient();
@@ -196,7 +200,7 @@ export const generateMainContent = async (
             internalLinksContext = `
             LINKS INTERNOS OBRIGATÓRIOS:
             - Insira estes links naturalmente no texto âncora adequado.
-            - Crie uma seção <h2>Veja Também</h2> (ou tradução para ${language}) perto do fim com a lista <ul> dos links.
+            - Crie uma seção <section><h2>Veja Também</h2><ul> (ou tradução para ${language}) com a lista <ul> dos links.
             - Links: ${JSON.stringify(links)}
             `;
         }
@@ -206,33 +210,104 @@ export const generateMainContent = async (
   const prompt = `
     ${ARTIGO_GENIO_PERSONA}
 
-    TAREFA: Escrever o CORPO COMPLETO do artigo sobre "${topic}".
+    ========================================================
+    0) ENTRADAS
+    ========================================================
+    tipo_artigo: Artigo Completo SEO
+    tema: "${topic}"
+    palavra_chave: "${keyword}"
+    autor: "${authorName || 'Redação'}"
+    tamanho_artigo: ${wordCount} palavras
+    site_base: "${siteUrl || ''}"
     
-    **IDIOMA:** ${language} (Texto fluido e nativo).
+    DADOS ESTRUTURAIS JÁ GERADOS (USE ESTES):
+    H1: "${structure.title}"
+    Lead: "${structure.lead}"
     
-    **DADOS:**
-    - Keyword: "${keyword}"
-    - Meta: ${wordCount} palavras
-    - Keywords LSI: ${serpData.lsiKeywords.join(', ')}
-    - Perguntas PAA: ${serpData.questions.join(', ')}
+    DADOS SEO:
+    Keywords LSI: ${serpData.lsiKeywords.join(', ')}
+    Perguntas PAA: ${serpData.questions.join(', ')}
 
-    **ESTRUTURA DE HTML (WordPress Ready):**
-    - NÃO repita o H1 ou o Lead (já tenho). Comece do primeiro H2.
-    - Use tags: <article>, <section>, <h2>, <h3>, <p>, <ul>, <ol>, <table>, <blockquote>.
-    - <strong> nos termos chave.
+    opcoes_avancadas:
+      incluir_sumario: ${options.includeToc}
+      incluir_glossario: ${options.includeGlossary}
+      incluir_tabelas: ${options.includeTables}
+      incluir_listas: ${options.includeLists}
+      fontes_seguras: ${options.secureSources}
+      creditos_autores: ${options.authorCredits}
     
-    **FUNCIONALIDADES ATIVAS:**
-    - ${options.includeToc ? 'Inclua <nav class="toc"> com links âncora para os H2.' : ''}
-    - ${options.includeTables ? 'Crie tabelas comparativas responsivas onde fizer sentido.' : ''}
-    - ${options.includeLists ? 'Use listas (bullet/number) para facilitar a leitura.' : ''}
-    - ${options.includeGlossary ? 'Adicione seção <section id="glossary"><h2>Glossário</h2> no final.' : ''}
-    - ${options.authorCredits ? 'Adicione <section id="author"> no final.' : ''}
-    - Crie uma seção de FAQ usando as perguntas PAA fornecidas.
     ${internalLinksContext}
-    
-    **REGRA DE OURO:** O conteúdo deve ser original, profundo e resolver a intenção de busca do usuário melhor que os concorrentes.
-    
-    Retorne APENAS O HTML do corpo.
+
+    ========================================================
+    1) REGRAS CRÍTICAS (NÃO NEGOCIÁVEIS)
+    ========================================================
+    A) SAÍDA SEM DUPLICAÇÃO:
+    - Gere APENAS 1 (um) bloco HTML final.
+    - Proibido repetir wrappers (ex: <div class="artigogenio-content"> duplicado).
+    - Proibido inserir placeholders e comentários HTML (ex: <!-- JS would generate TOC -->).
+    - Proibido criar dois TOCs. TOC deve existir no máximo 1 vez, e só se incluir_sumario=true.
+
+    B) SEO OBRIGATÓRIO:
+    - A palavra-chave "${keyword}" deve aparecer nos primeiros 100 caracteres do lead.
+    - Exatamente 1 H1 por artigo (já fornecido).
+    - Densidade da palavra-chave alvo: 0.8% a 1.2%.
+    - Texto escaneável: parágrafos curtos (máx. 4 linhas).
+
+    C) HTML SEGURO PARA BASE44 (WORDPRESS):
+    - Não use <script> nem <style>.
+    - Garanta tags fechadas corretamente.
+    - Use IDs únicos (kebab-case) em TODOS os H2/H3 quando TOC estiver ligado.
+
+    ========================================================
+    2) MONTAGEM DO HTML (MODELO OBRIGATÓRIO)
+    ========================================================
+    Você deve retornar UMA STRING contendo EXATAMENTE esta estrutura (preenchendo o conteúdo):
+
+    <div class="artigogenio-content">
+      <article>
+        <header>
+          <h1>${structure.title}</h1>
+          <p class="lead text-lg text-slate-600 mb-8 font-medium">${structure.lead}</p>
+        </header>
+
+        ${options.includeToc ? `<nav class="toc bg-slate-50 p-6 rounded-lg mb-8 border border-slate-200" aria-label="Sumário">
+          <h2 class="text-lg font-bold mb-4">Índice</h2>
+          <ul>
+            <!-- Gere os itens do índice (li > a[href]) apontando para os IDs das seções abaixo -->
+          </ul>
+        </nav>` : ''}
+
+        <section id="introducao">
+          <h2>Introdução</h2>
+          <p>...</p>
+        </section>
+
+        <!-- GERE O CORPO DO ARTIGO AQUI COM VÁRIAS SECTIONS, H2, H3, P, UL, TABLE -->
+
+        <section id="faq">
+          <h2>Perguntas frequentes</h2>
+          <!-- Responda as PAA aqui -->
+        </section>
+
+        ${options.includeGlossary ? `<section id="glossario">
+          <h2>Glossário</h2>
+          <dl>
+            <!-- Termos e definições -->
+          </dl>
+        </section>` : ''}
+
+        <footer id="autor" class="mt-8 pt-6 border-t border-slate-200">
+          <p><strong>Escrito por:</strong> ${authorName || 'Redação'}</p>
+          <p class="text-sm text-slate-500">Conteúdo revisado e otimizado para ${language}.</p>
+        </footer>
+      </article>
+    </div>
+
+    ========================================================
+    3) SAÍDA FINAL
+    ========================================================
+    Retorne APENAS o código HTML puro (sem \`\`\`html ou \`\`\`).
+    NÃO retorne JSON.
   `;
 
   try {
@@ -241,15 +316,25 @@ export const generateMainContent = async (
         contents: prompt,
         config: { 
             // Thinking budget ajuda a estruturar artigos longos e complexos
-            thinkingConfig: { thinkingBudget: 2048 },
+            thinkingConfig: { thinkingBudget: 4096 }, // Increased for complex HTML structure
             maxOutputTokens: 8192, 
         } 
       }));
 
+      // NOTE: response.text is a property getter, not a function!
       let html = response.text || "";
-      // Clean up markdown block if present
-      html = html.replace(/^```html\s*/i, '').replace(/\s*```$/, '');
-      return html;
+      
+      // LIMPEZA ROBUSTA PARA WORDPRESS
+      const markdownMatch = html.match(/```html([\s\S]*?)```/i) || html.match(/```([\s\S]*?)```/);
+      if (markdownMatch) {
+          html = markdownMatch[1];
+      }
+
+      // Remover tags indesejadas externas se a IA alucinar e colocar html/body
+      html = html.replace(/<\/?(html|body|head)[^>]*>/gi, '');
+      html = html.replace(/```/g, '');
+
+      return html.trim();
   } catch (error) {
      console.error("Main content generation error", error);
      throw error;
@@ -409,6 +494,7 @@ export const generateMediaStrategy = async (
         }
       }));
 
+      // NOTE: response.text is a property getter, not a function!
       if (response.text) {
           return JSON.parse(response.text);
       }

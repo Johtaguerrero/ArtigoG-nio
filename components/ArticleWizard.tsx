@@ -14,13 +14,11 @@ const StepIndicator = ({ step, current }: { step: number, current: number }) => 
   const isCurrent = step === current;
   
   return (
-    <div className="flex flex-col items-center">
-      <div className={`w-8 h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center font-bold transition-all text-sm md:text-base ${
-        isCompleted ? 'bg-green-500 text-white' : 
-        isCurrent ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/40' : 'bg-slate-200 text-slate-500'
+    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all text-sm md:text-base border-4 ${
+        isCompleted ? 'bg-green-500 border-green-500 text-white' : 
+        isCurrent ? 'bg-blue-600 border-blue-200 text-white shadow-lg' : 'bg-white border-slate-200 text-slate-400'
       }`}>
-        {isCompleted ? <CheckCircle size={16} /> : step}
-      </div>
+        {isCompleted ? <CheckCircle size={20} /> : step}
     </div>
   );
 };
@@ -130,6 +128,8 @@ export const ArticleWizard: React.FC = () => {
     setCurrentStep(2); // Move to processing UI
 
     try {
+      const currentAuthor = authors.find(a => a.id === article.authorId);
+
       // 1. SERP Analysis
       setProgress({ step: `Analisando SERP (${article.language})...`, percentage: 10 });
       const serpData = await geminiService.analyzeSerp(article.targetKeyword, article.language);
@@ -148,7 +148,8 @@ export const ArticleWizard: React.FC = () => {
         article.wordCount, 
         article.advancedOptions,
         article.language,
-        article.siteUrl
+        article.siteUrl,
+        currentAuthor?.name
       );
 
       // 4. Media Strategy (Video + Images)
@@ -159,33 +160,36 @@ export const ArticleWizard: React.FC = () => {
       setProgress({ step: 'Gerando metadados e schema JSON-LD...', percentage: 90 });
       const seoData = await geminiService.generateMetadata(article.topic, article.targetKeyword, htmlBody, article.language);
 
-      // Combine HTML (Structure + Body + Video)
-      let finalHtmlBody = htmlBody;
+      // Combine HTML (Video Injection)
+      // The AI now returns the full HTML including wrappers. We just need to inject video if present.
+      let fullHtml = htmlBody;
+      
       if (mediaData.videoData.embedHtml) {
-        const videoSection = `
-          <div class="video-container my-8">
-            <h3 class="text-lg font-bold mb-2 flex items-center gap-2"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-red-600"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg> Assista: ${mediaData.videoData.title}</h3>
-            <div class="aspect-w-16 aspect-h-9 bg-slate-100 rounded-xl overflow-hidden shadow-sm">
-              ${mediaData.videoData.embedHtml}
-            </div>
-            ${mediaData.videoData.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${mediaData.videoData.caption}</p>` : ''}
-          </div>
-        `;
-        finalHtmlBody = videoSection + finalHtmlBody; 
+        // Video section flat HTML
+        const videoSection = `<div class="video-container my-8">
+<h3 class="text-lg font-bold mb-2 flex items-center gap-2">Assista: ${mediaData.videoData.title}</h3>
+<div class="aspect-w-16 aspect-h-9 bg-slate-100 rounded-xl overflow-hidden shadow-sm">
+${mediaData.videoData.embedHtml}
+</div>
+${mediaData.videoData.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${mediaData.videoData.caption}</p>` : ''}
+</div>`;
+        
+        // Try to insert after the lead paragraph close tag
+        const leadCloseIndex = fullHtml.indexOf('</p>');
+        if (leadCloseIndex !== -1) {
+            // Insert after the lead paragraph
+            const insertPosition = leadCloseIndex + 4;
+            fullHtml = fullHtml.slice(0, insertPosition) + "\n" + videoSection + fullHtml.slice(insertPosition);
+        } else {
+            // Fallback: prepend to start of article body if possible, or just append to header
+            fullHtml = fullHtml.replace('<article>', `<article>\n${videoSection}`);
+        }
       }
 
-      const fullHtml = `
-        <article>
-          <p class="lead text-lg text-slate-600 mb-8 font-medium">${structure.lead}</p>
-          ${article.advancedOptions.includeToc ? `<nav class="toc bg-slate-50 p-6 rounded-lg mb-8 border border-slate-200"><h3 class="text-lg font-bold mb-4">Índice</h3><!-- JS would generate TOC here based on H2s --></nav>` : ''}
-          <div class="article-body">
-            ${finalHtmlBody}
-          </div>
-        </article>
-      `;
+      // Trim any excess whitespace
+      fullHtml = fullHtml.trim();
 
       // 6. Generate Technical SEO Data (Schema & WP JSON)
-      const currentAuthor = authors.find(a => a.id === article.authorId);
       // Construct temp article object to pass to generator
       const tempArticle: ArticleData = {
           ...article,
@@ -362,15 +366,13 @@ export const ArticleWizard: React.FC = () => {
       
       let newHtmlContent = article.htmlContent || '';
       if (newHtmlContent && videoResult.embedHtml) {
-        const videoSection = `
-          <div class="video-container my-8">
-            <h3 class="text-lg font-bold mb-2 flex items-center gap-2"><svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-red-600"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg> Assista: ${videoResult.title}</h3>
-            <div class="aspect-w-16 aspect-h-9 bg-slate-100 rounded-xl overflow-hidden shadow-sm">
-              ${videoResult.embedHtml}
-            </div>
-             ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoResult.caption}</p>` : ''}
-          </div>
-        `;
+        const videoSection = `<div class="video-container my-8">
+<h3 class="text-lg font-bold mb-2 flex items-center gap-2">Assista: ${videoResult.title}</h3>
+<div class="aspect-w-16 aspect-h-9 bg-slate-100 rounded-xl overflow-hidden shadow-sm">
+${videoResult.embedHtml}
+</div>
+${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoResult.caption}</p>` : ''}
+</div>`;
 
         if (newHtmlContent.includes('class="video-container')) {
            newHtmlContent = newHtmlContent.replace(/<div class="video-container[\s\S]*?<\/div>\s*<\/div>/, videoSection);
@@ -695,8 +697,22 @@ export const ArticleWizard: React.FC = () => {
 
             {activeTab === 'html' && (
               <div className="relative">
-                <button onClick={() => copyToClipboard(article.htmlContent!)} className="absolute top-0 right-0 p-2 bg-slate-100 hover:bg-slate-200 rounded text-slate-600"><Copy size={16} /></button>
-                <pre className="bg-slate-900 text-slate-100 p-6 rounded-lg overflow-x-auto text-sm font-mono h-[600px] whitespace-pre-wrap">{article.htmlContent}</pre>
+                <div className="flex justify-between items-center mb-3">
+                    <label className="text-sm font-bold text-slate-700 uppercase">HTML Puro (Copiar e colar no "Editor de Código" do WP)</label>
+                    <button 
+                        onClick={() => copyToClipboard(article.htmlContent!)} 
+                        className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition shadow-sm"
+                    >
+                        <Copy size={16} /> Copiar Código
+                    </button>
+                </div>
+                <textarea 
+                    className="w-full h-[600px] p-4 bg-slate-900 text-slate-50 font-mono text-xs md:text-sm rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none leading-relaxed"
+                    value={article.htmlContent || ''}
+                    readOnly
+                    onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+                />
+                <p className="text-xs text-slate-500 mt-2">Dica: No WordPress, use o bloco "HTML Personalizado" ou mude o editor para "Editor de Código" e cole este conteúdo.</p>
               </div>
             )}
 
@@ -1159,15 +1175,23 @@ export const ArticleWizard: React.FC = () => {
   };
 
   return (
-    <div className="p-4 md:p-8 max-w-7xl mx-auto">
-      <div className="flex justify-center mb-8 md:mb-12">
-        <div className="flex items-center gap-2 md:gap-4">
-           <StepIndicator step={1} current={currentStep} />
-           <div className={`w-8 md:w-16 h-1 ${currentStep > 1 ? 'bg-green-500' : 'bg-slate-200'}`}></div>
-           <StepIndicator step={2} current={currentStep} />
-           <div className={`w-8 md:w-16 h-1 ${currentStep > 2 ? 'bg-green-500' : 'bg-slate-200'}`}></div>
-           <StepIndicator step={3} current={currentStep} />
-        </div>
+    <div className="p-4 md:p-8 max-w-7xl mx-auto min-h-screen">
+      <div className="mb-12 max-w-2xl mx-auto">
+         <div className="relative flex justify-between items-center">
+            <div className="absolute left-0 right-0 top-1/2 h-1 bg-slate-200 -z-10 rounded"></div>
+            <div 
+              className="absolute left-0 top-1/2 h-1 bg-blue-600 -z-10 rounded transition-all duration-500" 
+              style={{ width: `${((currentStep - 1) / 2) * 100}%` }}
+            ></div>
+            <StepIndicator step={1} current={currentStep} />
+            <StepIndicator step={2} current={currentStep} />
+            <StepIndicator step={3} current={currentStep} />
+         </div>
+         <div className="flex justify-between mt-2 text-xs font-medium text-slate-500">
+            <span>Configuração</span>
+            <span>Geração</span>
+            <span>Revisão</span>
+         </div>
       </div>
 
       {currentStep === 1 && renderStep1()}
