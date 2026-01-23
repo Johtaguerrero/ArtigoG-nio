@@ -1,11 +1,19 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
 import { AdvancedOptions, SerpAnalysisResult, VideoData, ImageSpec, SeoData, ImageModelType, ImageResolution, AspectRatio, Author, ArticleData } from "../types";
+import { getBrowserApiKey } from "./storageService";
 
 // Helper to get client with dynamic key
 const getClient = () => {
-  // Guidelines: API key must be obtained exclusively from process.env.API_KEY
-  // Assume process.env.API_KEY is pre-configured and valid.
-  return new GoogleGenAI({ apiKey: process.env.API_KEY });
+  // 1. Tenta pegar do ambiente (seguro para deploy)
+  // 2. Tenta pegar do armazenamento local (para testes rápidos ou correções manuais)
+  const apiKey = process.env.API_KEY || getBrowserApiKey();
+  
+  if (!apiKey) {
+    console.error("API Key não encontrada. Configure a variável de ambiente API_KEY ou insira nas Configurações do App.");
+    throw new Error("Chave de API do Google ausente. Vá em 'Configurações' no menu lateral e cole sua chave API, ou configure a variável de ambiente.");
+  }
+
+  return new GoogleGenAI({ apiKey });
 };
 
 const MODEL_FLASH = 'gemini-3-flash-preview';

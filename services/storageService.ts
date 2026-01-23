@@ -3,6 +3,7 @@ import { ArticleData, Author, AppSettings } from '../types';
 const STORAGE_KEY = 'artigo_genio_articles';
 const AUTHORS_KEY = 'artigo_genio_authors';
 const SETTINGS_KEY = 'artigo_genio_settings';
+const API_KEY_STORAGE = 'artigo_genio_api_key'; // Nova chave para armazenar API Key localmente
 
 // PLACEHOLDER: Substitua pelo seu Client ID real do Google Cloud Console
 export const GOOGLE_CLIENT_ID = "SEU_CLIENT_ID_DO_GOOGLE.apps.googleusercontent.com"; 
@@ -12,6 +13,20 @@ export const parseJwt = (token: string) => {
     return JSON.parse(atob(token.split('.')[1]));
   } catch (e) {
     return null;
+  }
+};
+
+// --- API Key Management (Browser Side) ---
+
+export const getBrowserApiKey = (): string => {
+  return localStorage.getItem(API_KEY_STORAGE) || '';
+};
+
+export const saveBrowserApiKey = (key: string): void => {
+  if (!key) {
+    localStorage.removeItem(API_KEY_STORAGE);
+  } else {
+    localStorage.setItem(API_KEY_STORAGE, key.trim());
   }
 };
 

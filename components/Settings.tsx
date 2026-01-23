@@ -1,24 +1,27 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Save, User, Globe, Upload, Image as ImageIcon, Check, LogOut } from 'lucide-react';
+import { Save, User, Globe, Upload, Image as ImageIcon, Check, LogOut, Key } from 'lucide-react';
 import { AppSettings } from '../types';
-import { getSettings, saveSettings } from '../services/storageService';
+import { getSettings, saveSettings, getBrowserApiKey, saveBrowserApiKey } from '../services/storageService';
 
 export const Settings: React.FC = () => {
     const [settings, setSettings] = useState<AppSettings>({
         adminProfile: { name: '', role: '', photoUrl: '' },
         wordpress: { endpoint: '', username: '', applicationPassword: '' }
     });
+    const [apiKey, setApiKey] = useState('');
     
-    const [activeTab, setActiveTab] = useState<'admin' | 'wp'>('admin');
+    const [activeTab, setActiveTab] = useState<'admin' | 'wp' | 'api'>('admin');
     const [isSaved, setIsSaved] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         setSettings(getSettings());
+        setApiKey(getBrowserApiKey());
     }, []);
 
     const handleSave = () => {
         saveSettings(settings);
+        saveBrowserApiKey(apiKey);
         setIsSaved(true);
         setTimeout(() => setIsSaved(false), 3000);
     };
@@ -59,6 +62,7 @@ export const Settings: React.FC = () => {
     };
 
     const isGoogleLogin = !!settings.adminProfile.googleId;
+    const hasEnvKey = !!process.env.API_KEY;
 
     return (
         <div className="p-4 md:p-8 max-w-4xl mx-auto">
@@ -82,6 +86,12 @@ export const Settings: React.FC = () => {
                     className={`pb-3 px-4 font-medium transition whitespace-nowrap ${activeTab === 'admin' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500 hover:text-slate-800'}`}
                 >
                     <div className="flex items-center gap-2"><User size={18}/> Perfil Admin</div>
+                </button>
+                <button 
+                    onClick={() => setActiveTab('api')}
+                    className={`pb-3 px-4 font-medium transition whitespace-nowrap ${activeTab === 'api' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500 hover:text-slate-800'}`}
+                >
+                     <div className="flex items-center gap-2"><Key size={18}/> API Key</div>
                 </button>
                 <button 
                     onClick={() => setActiveTab('wp')}
@@ -170,6 +180,42 @@ export const Settings: React.FC = () => {
                                 </button>
                             </div>
                         )}
+                    </div>
+                )}
+
+                {activeTab === 'api' && (
+                    <div className="space-y-6 max-w-lg">
+                        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
+                            <h4 className="font-bold text-yellow-800 text-sm mb-1">Nota de Segurança</h4>
+                            <p className="text-sm text-yellow-800">
+                                A chave inserida aqui ficará salva <strong>apenas no seu navegador</strong>. Ela não será enviada para nenhum servidor externo além do Google Gemini.
+                            </p>
+                        </div>
+                        
+                        {hasEnvKey && (
+                            <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-center gap-2 text-green-700 text-sm">
+                                <Check size={16} /> Uma chave API já está configurada via Variável de Ambiente. Você não precisa inserir uma aqui, a menos que queira substituí-la.
+                            </div>
+                        )}
+
+                        <div>
+                            <label className="block text-sm font-medium text-slate-700 mb-1">Google Gemini API Key</label>
+                            <div className="relative">
+                                <input 
+                                    type="password" 
+                                    placeholder="AIzaSy..."
+                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono"
+                                    value={apiKey}
+                                    onChange={e => setApiKey(e.target.value)}
+                                />
+                                <div className="absolute right-2 top-2 text-slate-400">
+                                    <Key size={20} />
+                                </div>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-2">
+                                Obtenha sua chave gratuitamente no <a href="https://aistudio.google.com/app/api-keys" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">Google AI Studio</a>.
+                            </p>
+                        </div>
                     </div>
                 )}
 
