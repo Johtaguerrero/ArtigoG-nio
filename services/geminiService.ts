@@ -291,7 +291,14 @@ export const generateMetadata = async (
     try {
         const response = await generateSmartContent(
             MODEL_PRIMARY_TEXT,
-            `Gere SEO JSON (yoast) para artigo "${topic}", keyword "${keyword}", idioma ${language}.`,
+            `Gere SEO JSON (yoast) para artigo "${topic}", keyword "${keyword}", idioma ${language}.
+            
+            REGRAS CRÍTICAS DE TAMANHO (OBRIGATÓRIO):
+            1. metaDescription: DEVE ter no MÁXIMO 156 CARACTERES (letras/espaços). NÃO ultrapasse. Seja conciso.
+            2. seoTitle: Máximo 60 caracteres.
+            
+            Exemplo Bom de Meta (140 chars): "Saiba tudo sobre Energia Solar. Descubra como economizar na conta de luz e valorizar seu imóvel com painéis fotovoltaicos em 2025."
+            `,
             {
                 responseMimeType: "application/json",
                 responseSchema: {
@@ -322,8 +329,8 @@ export const generateMetadata = async (
     } catch (e) { console.error("Metadata gen failed", e); }
     
     return {
-        seoTitle: `${keyword}: Guia Completo`,
-        metaDescription: `Saiba tudo sobre ${keyword}.`,
+        seoTitle: `${keyword}: Guia Completo`.substring(0, 60),
+        metaDescription: `Saiba tudo sobre ${keyword}. Guia completo.`.substring(0, 156),
         slug: keyword.toLowerCase().replace(/ /g, '-'),
         targetKeyword: keyword,
         synonyms: [],
@@ -556,6 +563,8 @@ export const editGeneratedImage = async (
 export const findRealYoutubeVideo = async (query: string): Promise<VideoData> => {
   const prompt = `
     Find the most relevant YouTube video for the search query: "${query}".
+    CRITICAL: You MUST return a direct 'watch' URL (e.g., youtube.com/watch?v=...).
+    Do NOT return channel URLs or playlist URLs.
     Return a JSON object with title, channel, url (valid youtube watch url), caption (journalistic in pt-br), altText.
   `;
 
@@ -585,9 +594,9 @@ export const findRealYoutubeVideo = async (query: string): Promise<VideoData> =>
   const result = JSON.parse(response.text);
   if (!result.url) throw new Error("No URL found");
 
-  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
   const match = result.url.match(regExp);
-  const videoId = (match && match[2].length === 11) ? match[2] : null;
+  const videoId = match ? match[1] : null;
 
   let embedHtml = "";
   let thumbnailUrl = "";

@@ -176,13 +176,14 @@ export const ArticleWizard: React.FC = () => {
       let fullHtml = htmlBody;
       
       if (mediaData.videoData.embedHtml) {
-        const videoSection = `<div class="video-container my-8">
+        // Marcador único para facilitar substituição futura
+        const videoSection = `<div id="featured-video-container" class="video-container my-8">
 <h3 class="text-lg font-bold mb-2 flex items-center gap-2">Assista: ${mediaData.videoData.title}</h3>
-<div class="aspect-w-16 aspect-h-9 bg-slate-100 rounded-xl overflow-hidden shadow-sm">
+<div class="aspect-video bg-slate-100 rounded-xl overflow-hidden shadow-sm">
 ${mediaData.videoData.embedHtml}
 </div>
 ${mediaData.videoData.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${mediaData.videoData.caption}</p>` : ''}
-</div>`;
+</div><!-- video-end -->`;
         
         const leadCloseIndex = fullHtml.indexOf('</p>');
         if (leadCloseIndex !== -1) {
@@ -390,26 +391,43 @@ ${mediaData.videoData.caption ? `<p class="text-sm text-slate-500 mt-2 italic">$
 
     setIsSearchingVideo(true);
     try {
+      // 1. Encontrar o vídeo usando o serviço (agora mais robusto)
       const videoResult = await geminiService.findRealYoutubeVideo(query);
       
       let newHtmlContent = article.htmlContent || '';
+      
       if (newHtmlContent && videoResult.embedHtml) {
-        const videoSection = `<div class="video-container my-8">
+        // Criamos o bloco HTML do vídeo com um ID específico para facilitar substituição
+        const videoSection = `<div id="featured-video-container" class="video-container my-8">
 <h3 class="text-lg font-bold mb-2 flex items-center gap-2">Assista: ${videoResult.title}</h3>
-<div class="aspect-w-16 aspect-h-9 bg-slate-100 rounded-xl overflow-hidden shadow-sm">
+<div class="aspect-video bg-slate-100 rounded-xl overflow-hidden shadow-sm">
 ${videoResult.embedHtml}
 </div>
 ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoResult.caption}</p>` : ''}
-</div>`;
+</div><!-- video-end -->`;
 
-        if (newHtmlContent.includes('class="video-container')) {
-           newHtmlContent = newHtmlContent.replace(/<div class="video-container[\s\S]*?<\/div>\s*<\/div>/, videoSection);
+        // 2. Lógica de Injeção Inteligente
+        
+        // Verifica se já existe um container de vídeo (pelo ID ou pela classe antiga)
+        const hasExistingVideo = newHtmlContent.includes('id="featured-video-container"') || newHtmlContent.includes('class="video-container');
+        
+        if (hasExistingVideo) {
+           // Regex para substituir o bloco de vídeo inteiro (tenta capturar até o comentário de fechamento ou fim da div)
+           // Fallback para div genérica se o comentário não existir (artigos antigos)
+           if (newHtmlContent.includes('<!-- video-end -->')) {
+               newHtmlContent = newHtmlContent.replace(/<div id="featured-video-container"[\s\S]*?<!-- video-end -->/, videoSection);
+           } else {
+               // Fallback regex (menos preciso, mas funciona para estrutura antiga)
+               newHtmlContent = newHtmlContent.replace(/<div class="video-container[\s\S]*?<\/div>\s*<\/div>/, videoSection);
+           }
         } else {
+           // Se não existe, injeta após o primeiro parágrafo (Lead)
            const leadEndIndex = newHtmlContent.indexOf('</p>');
            if (leadEndIndex !== -1) {
-              newHtmlContent = newHtmlContent.slice(0, leadEndIndex + 4) + videoSection + newHtmlContent.slice(leadEndIndex + 4);
+              newHtmlContent = newHtmlContent.slice(0, leadEndIndex + 4) + "\n" + videoSection + newHtmlContent.slice(leadEndIndex + 4);
            } else {
-              newHtmlContent = videoSection + newHtmlContent;
+              // Se não achar parágrafo, coloca no topo do article
+              newHtmlContent = newHtmlContent.replace('<article>', `<article>\n${videoSection}`);
            }
         }
       }
@@ -422,9 +440,13 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
 
       setArticle(updatedArticle);
       saveArticle(updatedArticle);
+      
+      // Feedback visual
+      alert("Vídeo encontrado e inserido no artigo com sucesso!");
+
     } catch (e) {
       console.error(e);
-      alert("Erro ao buscar vídeo no YouTube.");
+      alert("Erro ao buscar vídeo no YouTube. Tente refinar o termo de busca.");
     } finally {
       setIsSearchingVideo(false);
     }
