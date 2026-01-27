@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { LayoutDashboard, PenTool, BookOpen, Users, Settings, LogOut, User as UserIcon, Menu, X } from 'lucide-react';
 import { Link, useLocation } from 'react-router-dom';
-import { getSettings, saveSettings, parseJwt, GOOGLE_CLIENT_ID } from '../services/storageService';
+import { getSettings, saveSettings, parseJwt, getGoogleClientId } from '../services/storageService';
 import { AppSettings } from '../types';
 
 declare global {
@@ -59,8 +59,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     };
 
     if (window.google) {
+      const clientId = getGoogleClientId();
+      
       window.google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
+        client_id: clientId,
         callback: handleCredentialResponse,
         auto_select: false
       });
@@ -193,7 +195,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                     <div id="googleSignInBtn" className="h-[40px]"></div>
                 </div>
                 <div className="text-[10px] text-slate-400 text-center mt-2 px-2 leading-tight">
-                   Configure o Client ID em <br/><code className="bg-slate-100 px-1 rounded">storageService.ts</code>
+                   Configure o Client ID em <br/><span className="bg-slate-100 px-1 rounded">Configurações</span>
                 </div>
              </div>
           )}

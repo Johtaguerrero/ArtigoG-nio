@@ -3,16 +3,32 @@ import { ArticleData, Author, AppSettings } from '../types';
 const STORAGE_KEY = 'artigo_genio_articles';
 const AUTHORS_KEY = 'artigo_genio_authors';
 const SETTINGS_KEY = 'artigo_genio_settings';
-const API_KEY_STORAGE = 'artigo_genio_api_key'; // Nova chave para armazenar API Key localmente
+const API_KEY_STORAGE = 'artigo_genio_api_key';
+const CLIENT_ID_STORAGE = 'artigo_genio_client_id';
 
-// PLACEHOLDER: Substitua pelo seu Client ID real do Google Cloud Console
-export const GOOGLE_CLIENT_ID = "SEU_CLIENT_ID_DO_GOOGLE.apps.googleusercontent.com"; 
+// PLACEHOLDER: Este valor é usado apenas se não houver um no LocalStorage
+// Não exportamos mais como constante hardcoded para forçar o uso da função getGoogleClientId
+const DEFAULT_CLIENT_ID = ""; 
 
 export const parseJwt = (token: string) => {
   try {
     return JSON.parse(atob(token.split('.')[1]));
   } catch (e) {
     return null;
+  }
+};
+
+// --- Google Client ID Management ---
+
+export const getGoogleClientId = (): string => {
+  return localStorage.getItem(CLIENT_ID_STORAGE) || DEFAULT_CLIENT_ID;
+};
+
+export const saveGoogleClientId = (id: string): void => {
+  if (!id) {
+    localStorage.removeItem(CLIENT_ID_STORAGE);
+  } else {
+    localStorage.setItem(CLIENT_ID_STORAGE, id.trim());
   }
 };
 

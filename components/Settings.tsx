@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Save, User, Globe, Upload, Image as ImageIcon, Check, LogOut, Key } from 'lucide-react';
+import { Save, User, Globe, Upload, Image as ImageIcon, Check, LogOut, Key, Shield } from 'lucide-react';
 import { AppSettings } from '../types';
-import { getSettings, saveSettings, getBrowserApiKey, saveBrowserApiKey } from '../services/storageService';
+import { getSettings, saveSettings, getBrowserApiKey, saveBrowserApiKey, getGoogleClientId, saveGoogleClientId } from '../services/storageService';
 
 export const Settings: React.FC = () => {
     const [settings, setSettings] = useState<AppSettings>({
@@ -9,19 +9,22 @@ export const Settings: React.FC = () => {
         wordpress: { endpoint: '', username: '', applicationPassword: '' }
     });
     const [apiKey, setApiKey] = useState('');
+    const [googleClientId, setGoogleClientId] = useState('');
     
-    const [activeTab, setActiveTab] = useState<'admin' | 'wp' | 'api'>('admin');
+    const [activeTab, setActiveTab] = useState<'admin' | 'wp' | 'access'>('admin');
     const [isSaved, setIsSaved] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         setSettings(getSettings());
         setApiKey(getBrowserApiKey());
+        setGoogleClientId(getGoogleClientId());
     }, []);
 
     const handleSave = () => {
         saveSettings(settings);
         saveBrowserApiKey(apiKey);
+        saveGoogleClientId(googleClientId);
         setIsSaved(true);
         setTimeout(() => setIsSaved(false), 3000);
     };
@@ -88,10 +91,10 @@ export const Settings: React.FC = () => {
                     <div className="flex items-center gap-2"><User size={18}/> Perfil Admin</div>
                 </button>
                 <button 
-                    onClick={() => setActiveTab('api')}
-                    className={`pb-3 px-4 font-medium transition whitespace-nowrap ${activeTab === 'api' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500 hover:text-slate-800'}`}
+                    onClick={() => setActiveTab('access')}
+                    className={`pb-3 px-4 font-medium transition whitespace-nowrap ${activeTab === 'access' ? 'text-blue-600 border-b-2 border-blue-600' : 'text-slate-500 hover:text-slate-800'}`}
                 >
-                     <div className="flex items-center gap-2"><Key size={18}/> API Key</div>
+                     <div className="flex items-center gap-2"><Key size={18}/> Chaves & Acesso</div>
                 </button>
                 <button 
                     onClick={() => setActiveTab('wp')}
@@ -183,24 +186,29 @@ export const Settings: React.FC = () => {
                     </div>
                 )}
 
-                {activeTab === 'api' && (
-                    <div className="space-y-6 max-w-lg">
-                        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
-                            <h4 className="font-bold text-yellow-800 text-sm mb-1">Nota de Segurança</h4>
-                            <p className="text-sm text-yellow-800">
-                                A chave inserida aqui ficará salva <strong>apenas no seu navegador</strong>. Ela não será enviada para nenhum servidor externo além do Google Gemini.
-                            </p>
-                        </div>
-                        
-                        {hasEnvKey && (
-                            <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-center gap-2 text-green-700 text-sm">
-                                <Check size={16} /> Uma chave API já está configurada via Variável de Ambiente. Você não precisa inserir uma aqui, a menos que queira substituí-la.
+                {activeTab === 'access' && (
+                    <div className="space-y-8 max-w-lg">
+                        {/* API Key Section */}
+                        <div className="space-y-4">
+                            <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
+                                <Key className="text-blue-600" size={20} />
+                                <h3 className="font-bold text-slate-800">Google Gemini API Key</h3>
                             </div>
-                        )}
+                            
+                            <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                                <p className="text-sm text-yellow-800">
+                                    Essencial para gerar artigos e imagens. A chave fica salva no seu navegador.
+                                </p>
+                            </div>
 
-                        <div>
-                            <label className="block text-sm font-medium text-slate-700 mb-1">Google Gemini API Key</label>
-                            <div className="relative">
+                            {hasEnvKey && (
+                                <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-center gap-2 text-green-700 text-sm">
+                                    <Check size={16} /> Uma chave API já está configurada no ambiente.
+                                </div>
+                            )}
+
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Sua API Key</label>
                                 <input 
                                     type="password" 
                                     placeholder="AIzaSy..."
@@ -208,13 +216,40 @@ export const Settings: React.FC = () => {
                                     value={apiKey}
                                     onChange={e => setApiKey(e.target.value)}
                                 />
-                                <div className="absolute right-2 top-2 text-slate-400">
-                                    <Key size={20} />
-                                </div>
+                                <p className="text-xs text-slate-500 mt-2">
+                                    Obtenha em <a href="https://aistudio.google.com/app/api-keys" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">Google AI Studio</a>.
+                                </p>
                             </div>
-                            <p className="text-xs text-slate-500 mt-2">
-                                Obtenha sua chave gratuitamente no <a href="https://aistudio.google.com/app/api-keys" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">Google AI Studio</a>.
-                            </p>
+                        </div>
+
+                        {/* Google Login Section */}
+                        <div className="space-y-4 pt-4 border-t border-slate-100">
+                            <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
+                                <Shield className="text-blue-600" size={20} />
+                                <h3 className="font-bold text-slate-800">Login Google (OAuth)</h3>
+                            </div>
+
+                            <div className="bg-slate-50 border border-slate-200 rounded-lg p-4">
+                                <p className="text-sm text-slate-600">
+                                    Para fazer login com sua conta Google, você precisa criar um <strong>ID do Cliente OAuth</strong> no Google Cloud Console e adicionar aqui.
+                                </p>
+                                <ul className="list-disc pl-5 mt-2 text-xs text-slate-500 space-y-1">
+                                    <li>Vá para <a href="https://console.cloud.google.com/apis/credentials" target="_blank" className="text-blue-600 underline">Google Cloud Console</a>.</li>
+                                    <li>Crie um ID do cliente OAuth 2.0 (Aplicativo da Web).</li>
+                                    <li>Adicione <code>https://artigogenio.netlify.app</code> (ou seu domínio) em <strong>Origens JavaScript autorizadas</strong>.</li>
+                                </ul>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-medium text-slate-700 mb-1">Google Client ID</label>
+                                <input 
+                                    type="text" 
+                                    placeholder="123456...apps.googleusercontent.com"
+                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none font-mono text-sm"
+                                    value={googleClientId}
+                                    onChange={e => setGoogleClientId(e.target.value)}
+                                />
+                            </div>
                         </div>
                     </div>
                 )}
