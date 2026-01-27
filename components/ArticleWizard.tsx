@@ -14,7 +14,7 @@ const StepIndicator = ({ step, current }: { step: number, current: number }) => 
   const isCurrent = step === current;
   
   return (
-    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all text-sm md:text-base border-4 ${
+    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all text-sm md:text-base border-4 z-10 ${
         isCompleted ? 'bg-green-500 border-green-500 text-white' : 
         isCurrent ? 'bg-blue-600 border-blue-200 text-white shadow-lg' : 'bg-white border-slate-200 text-slate-400'
       }`}>
@@ -1201,3 +1201,26 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
       </div>
     );
   };
+
+  return (
+    <div className="min-h-screen bg-slate-50 pb-20">
+      <div className="max-w-4xl mx-auto pt-8 px-4 mb-8">
+        <div className="flex justify-between items-center relative max-w-xs mx-auto">
+          <div className="absolute top-1/2 left-0 right-0 h-1 bg-slate-200 -z-10 rounded"></div>
+          <StepIndicator step={1} current={currentStep} />
+          <StepIndicator step={2} current={currentStep} />
+          <StepIndicator step={3} current={currentStep} />
+        </div>
+        <div className="flex justify-between text-xs text-slate-400 font-medium uppercase tracking-wider mt-2 max-w-xs mx-auto">
+            <span>Configurar</span>
+            <span>Gerar</span>
+            <span>Revisar</span>
+        </div>
+      </div>
+
+      {currentStep === 1 && renderStep1()}
+      {currentStep === 2 && renderProgress()}
+      {currentStep === 3 && renderReview()}
+    </div>
+  );
+};
