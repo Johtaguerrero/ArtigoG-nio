@@ -216,28 +216,31 @@ ${mediaData.videoData.caption ? `<p class="text-sm text-slate-500 mt-2 italic">$
 
     } catch (e: any) {
       console.error(e);
-      // Tentar parsear mensagem de erro JSON da API
-      let displayError = e.message || "Erro desconhecido";
-      try {
-        // Se a mensagem contiver JSON, tenta extrair a mensagem "message" interna
-        const jsonMatch = displayError.match(/\{.*\}/s);
-        if (jsonMatch) {
-            const errorObj = JSON.parse(jsonMatch[0]);
-            if (errorObj.error && errorObj.error.message) {
-                displayError = errorObj.error.message;
-            }
-        }
-      } catch (parseErr) {
-          // Mantém a mensagem original se falhar
-      }
+      // TRATAMENTO DE ERRO MELHORADO
+      let errorMessage = e.message || "Erro desconhecido";
       
-      // Tradução amigável para erros comuns
-      if (displayError.includes('429') || displayError.includes('Quota exceeded')) {
-          displayError = "Limite de cota excedido (Erro 429). A IA está sobrecarregada ou você atingiu o limite diário gratuito. Tente novamente mais tarde ou verifique sua API Key.";
+      // Tenta parsear JSON dentro da mensagem de erro se existir
+      try {
+          const jsonStart = errorMessage.indexOf('{');
+          const jsonEnd = errorMessage.lastIndexOf('}');
+          if (jsonStart !== -1 && jsonEnd !== -1) {
+              const jsonStr = errorMessage.substring(jsonStart, jsonEnd + 1);
+              const errorObj = JSON.parse(jsonStr);
+              if (errorObj.error && errorObj.error.message) {
+                  errorMessage = errorObj.error.message;
+              }
+          }
+      } catch (parseErr) {
+          // Mantém mensagem original se falhar
       }
 
-      setError(displayError);
-      setCurrentStep(1); // Go back to edit
+      // Tradução amigável para erros comuns
+      if (errorMessage.includes("429") || errorMessage.includes("quota") || errorMessage.includes("RESOURCE_EXHAUSTED")) {
+          errorMessage = "Limite de cota excedido (Erro 429). O sistema tentou recuperar mas a demanda está alta. Por favor, aguarde alguns instantes ou verifique sua API Key.";
+      }
+
+      setError(errorMessage);
+      setCurrentStep(1); // Voltar para edição
     } finally {
       setIsGenerating(false);
     }

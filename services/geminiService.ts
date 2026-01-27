@@ -15,9 +15,9 @@ const getClient = () => {
 };
 
 // Configuração de Modelos
-// PRIMÁRIO: O modelo mais recente e capaz solicitado
+// PRIMÁRIO: O modelo mais recente e capaz solicitado (Gemini 3 Flash Preview)
 const MODEL_PRIMARY_TEXT = 'gemini-3-flash-preview'; 
-// FALLBACK: Modelo estável com limites de cota maiores (Gemini 2.0 Flash)
+// FALLBACK: Modelo estável com limites de cota maiores (Gemini 2.0/1.5 Flash)
 const MODEL_FALLBACK_TEXT = 'gemini-flash-latest'; 
 
 const MODEL_IMAGE_FLASH = 'gemini-2.5-flash-image';
@@ -39,53 +39,6 @@ SEMPRE siga estas regras:
 4. Parágrafos curtos e escaneáveis.
 `;
 
-/**
- * Função Wrapper inteligente que tenta o modelo primário e, 
- * se falhar por Cota (429) ou Sobrecarga (503), tenta o modelo de fallback.
- */
-async function generateSmartContent(
-  model: string, 
-  contents: any, 
-  config: any,
-  fallbackModel: string = MODEL_FALLBACK_TEXT
-): Promise<GenerateContentResponse> {
-  const ai = getClient();
-
-  const runRequest = async (targetModel: string) => {
-    return await ai.models.generateContent({
-      model: targetModel,
-      contents,
-      config
-    });
-  };
-
-  try {
-    // Tentativa 1: Modelo Primário (Gemini 3)
-    return await retryWithBackoff(() => runRequest(model), 2, 1000);
-  } catch (error: any) {
-    // Verifica se é erro de Cota (429) ou Serviço Indisponível (503)
-    const isQuotaOrLoadError = 
-      error?.status === 429 || 
-      error?.code === 429 || 
-      (error?.message && error.message.includes('429')) ||
-      (error?.message && error.message.includes('quota')) ||
-      (error?.message && error.message.includes('RESOURCE_EXHAUSTED')) ||
-      error?.status === 503;
-
-    if (isQuotaOrLoadError && model !== fallbackModel) {
-      console.warn(`Modelo ${model} falhou por cota/carga. Tentando fallback para ${fallbackModel}...`);
-      // Tentativa 2: Modelo Fallback (Gemini Flash Estável)
-      // Removemos configs específicas do Gemini 3 que podem não existir no anterior (ex: thinkingConfig se necessário, mas flash-latest suporta bem)
-      const cleanConfig = { ...config };
-      if (cleanConfig.thinkingConfig && fallbackModel.includes('1.5')) {
-          delete cleanConfig.thinkingConfig; // Remove thinking se o fallback for muito antigo (não é o caso do flash-latest/2.0)
-      }
-      return await retryWithBackoff(() => runRequest(fallbackModel), 2, 2000);
-    }
-    throw error;
-  }
-}
-
 // Helper for rate limit handling with exponential backoff
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
@@ -99,11 +52,60 @@ async function retryWithBackoff<T>(
     const isRetryable = 
       error?.status === 429 || 
       error?.status === 503 || 
-      (error?.message && (error.message.includes('429') || error.message.includes('overloaded') || error.message.includes('fetch')));
+      (error?.message && (error.message.includes('429') || error.message.includes('overloaded') || error.message.includes('fetch') || error.message.includes('quota')));
 
     if (retries > 0 && isRetryable) {
       await new Promise(resolve => setTimeout(resolve, delay));
       return retryWithBackoff(fn, retries - 1, delay * factor, factor);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Função Wrapper Inteligente:
+ * Tenta gerar com o modelo primário. Se der erro de cota (429), tenta com o fallback.
+ */
+async function generateSmartContent(
+  model: string, 
+  contents: any, 
+  config: any,
+  fallbackModel: string = MODEL_FALLBACK_TEXT
+): Promise<GenerateContentResponse> {
+  const ai = getClient();
+
+  const runRequest = async (targetModel: string, targetConfig: any) => {
+    return await ai.models.generateContent({
+      model: targetModel,
+      contents,
+      config: targetConfig
+    });
+  };
+
+  try {
+    // Tentativa 1: Modelo Primário
+    return await retryWithBackoff(() => runRequest(model, config), 2, 1000);
+  } catch (error: any) {
+    // Verifica erros de cota ou sobrecarga
+    const isQuotaOrLoadError = 
+      error?.status === 429 || 
+      error?.code === 429 || 
+      (error?.message && error.message.includes('429')) ||
+      (error?.message && error.message.includes('quota')) ||
+      (error?.message && error.message.includes('RESOURCE_EXHAUSTED')) ||
+      error?.status === 503;
+
+    if (isQuotaOrLoadError && model !== fallbackModel) {
+      console.warn(`Modelo ${model} falhou por cota. Tentando fallback para ${fallbackModel}...`);
+      
+      // Limpeza de Config: Thinking Config pode não ser suportado em modelos mais antigos/estáveis
+      const cleanConfig = { ...config };
+      if (cleanConfig.thinkingConfig) {
+          delete cleanConfig.thinkingConfig;
+      }
+
+      // Tentativa 2: Modelo Fallback
+      return await retryWithBackoff(() => runRequest(fallbackModel, cleanConfig), 2, 2000);
     }
     throw error;
   }
@@ -251,8 +253,7 @@ export const generateMainContent = async (
         MODEL_PRIMARY_TEXT,
         prompt,
         { 
-            // Thinking budget ajuda na estruturação, mas se o modelo primário falhar,
-            // o fallback (2.0) vai ignorar ou usar padrão.
+            // Thinking budget ajuda na estruturação complexa
             thinkingConfig: { thinkingBudget: 4096 }, 
             maxOutputTokens: 8192, 
         } 
@@ -543,6 +544,7 @@ export const findRealYoutubeVideo = async (query: string): Promise<VideoData> =>
   `;
 
   // Aqui usamos diretamente o fallback (Flash Stable) porque a busca do Google consome muita cota
+  // e o modelo Flash é suficiente e mais econômico para esta tarefa
   const response = await generateSmartContent(
     MODEL_FALLBACK_TEXT, 
     prompt,
