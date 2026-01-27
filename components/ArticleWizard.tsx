@@ -9,6 +9,14 @@ import * as geminiService from '../services/geminiService';
 import * as wordpressService from '../services/wordpressService';
 import { saveArticle, getAuthors, getArticle, deleteArticle, getSettings, saveSettings } from '../services/storageService';
 
+// Helper seguro para geração de ID que funciona em todos os ambientes
+const generateId = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return Date.now().toString(36) + Math.random().toString(36).substring(2);
+};
+
 const StepIndicator = ({ step, current }: { step: number, current: number }) => {
   const isCompleted = step < current;
   const isCurrent = step === current;
@@ -45,9 +53,9 @@ export const ArticleWizard: React.FC = () => {
   const [editPrompt, setEditPrompt] = useState("");
   const [isEditingImage, setIsEditingImage] = useState(false);
 
-  // Article State
+  // Article State initialized with safe ID generator
   const [article, setArticle] = useState<ArticleData>({
-    id: crypto.randomUUID(),
+    id: generateId(),
     topic: '',
     targetKeyword: '',
     language: 'Português', // Default language
@@ -74,36 +82,40 @@ export const ArticleWizard: React.FC = () => {
   const [eeatSubTab, setEeatSubTab] = useState<'score' | 'schema' | 'wp'>('score'); // New Sub-tab state for EEAT
 
   useEffect(() => {
-    // Load authors
-    const loadedAuthors = getAuthors();
-    setAuthors(loadedAuthors);
-    
-    // Get global settings for defaults
-    const settings = getSettings();
+    // Load authors safely
+    try {
+        const loadedAuthors = getAuthors();
+        setAuthors(loadedAuthors || []);
+        
+        // Get global settings for defaults
+        const settings = getSettings();
 
-    // If ID is present in URL, load the article
-    if (id) {
-      const existingArticle = getArticle(id);
-      if (existingArticle) {
-        // Ensure language exists for older articles
-        if (!existingArticle.language) existingArticle.language = 'Português';
-        // Ensure defaults for image settings
-        if (!existingArticle.imageSettings) {
-            existingArticle.imageSettings = { model: 'gemini-2.5-flash-image', resolution: '1K' };
+        // If ID is present in URL, load the article
+        if (id) {
+        const existingArticle = getArticle(id);
+        if (existingArticle) {
+            // Ensure language exists for older articles
+            if (!existingArticle.language) existingArticle.language = 'Português';
+            // Ensure defaults for image settings
+            if (!existingArticle.imageSettings) {
+                existingArticle.imageSettings = { model: 'gemini-2.5-flash-image', resolution: '1K' };
+            }
+            setArticle(existingArticle);
+            // If it's already generated/completed, jump to step 3
+            if (existingArticle.status === 'completed' || existingArticle.status === 'published' || existingArticle.htmlContent) {
+            setCurrentStep(3);
+            }
         }
-        setArticle(existingArticle);
-        // If it's already generated/completed, jump to step 3
-        if (existingArticle.status === 'completed' || existingArticle.status === 'published' || existingArticle.htmlContent) {
-          setCurrentStep(3);
+        } else {
+        // Setup NEW article defaults
+        setArticle(prev => ({ 
+            ...prev, 
+            authorId: (loadedAuthors && loadedAuthors.length > 0) ? loadedAuthors[0].id : '',
+            siteUrl: settings.defaultSiteUrl || '' // Pre-fill site URL from settings
+        }));
         }
-      }
-    } else {
-      // Setup NEW article defaults
-      setArticle(prev => ({ 
-        ...prev, 
-        authorId: loadedAuthors.length > 0 ? loadedAuthors[0].id : '',
-        siteUrl: settings.defaultSiteUrl || '' // Pre-fill site URL from settings
-      }));
+    } catch (e) {
+        console.error("Error initializing wizard", e);
     }
   }, [id]);
 
@@ -327,9 +339,9 @@ ${mediaData.videoData.caption ? `<p class="text-sm text-slate-500 mt-2 italic">$
       };
       setArticle({ ...article, imageSpecs: newSpecs });
       saveArticle({ ...article, imageSpecs: newSpecs });
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert("Erro ao gerar imagem. Tente novamente.");
+      alert(`Erro ao gerar imagem: ${e.message}`);
     } finally {
       setGeneratingImageIndex(null);
     }
@@ -540,7 +552,7 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
                 onChange={e => setArticle({...article, authorId: e.target.value})}
               >
                 {authors.map(author => (
-                  <option key={author.id} value={author.id}>{author.name} ({author.expertise.join(', ')})</option>
+                  <option key={author.id} value={author.id}>{author.name} ({author.expertise?.join(', ') || ''})</option>
                 ))}
               </select>
             ) : (
@@ -1039,10 +1051,10 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
                                         <span className="text-xs font-bold text-slate-500">Tags (10 itens)</span>
                                         <button onClick={() => copyToClipboard(article.seoData?.tags?.join(', ') || '')} className="text-blue-600 text-xs font-medium flex gap-1"><Copy size={12}/> Copiar todas</button>
                                      </div>
-                                     <div className="flex flex-wrap gap-2 p-3 bg-slate-50 rounded-lg border border-slate-100">
-                                         {article.seoData?.tags?.map((tag, i) => (
-                                             <span key={i} className="text-xs text-slate-600 font-mono">#{tag}</span>
-                                         ))}
+                                     <div className="p-3 bg-slate-50 rounded-lg border border-slate-100">
+                                        <p className="text-sm text-slate-600 font-mono leading-relaxed">
+                                        {article.seoData?.tags?.join(', ') || "Nenhuma tag gerada."}
+                                        </p>
                                      </div>
                                  </div>
                              </div>
@@ -1202,25 +1214,7 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
     );
   };
 
-  return (
-    <div className="min-h-screen bg-slate-50 pb-20">
-      <div className="max-w-4xl mx-auto pt-8 px-4 mb-8">
-        <div className="flex justify-between items-center relative max-w-xs mx-auto">
-          <div className="absolute top-1/2 left-0 right-0 h-1 bg-slate-200 -z-10 rounded"></div>
-          <StepIndicator step={1} current={currentStep} />
-          <StepIndicator step={2} current={currentStep} />
-          <StepIndicator step={3} current={currentStep} />
-        </div>
-        <div className="flex justify-between text-xs text-slate-400 font-medium uppercase tracking-wider mt-2 max-w-xs mx-auto">
-            <span>Configurar</span>
-            <span>Gerar</span>
-            <span>Revisar</span>
-        </div>
-      </div>
-
-      {currentStep === 1 && renderStep1()}
-      {currentStep === 2 && renderProgress()}
-      {currentStep === 3 && renderReview()}
-    </div>
-  );
+  if (currentStep === 1) return renderStep1();
+  if (currentStep === 2) return renderProgress();
+  return renderReview();
 };

@@ -169,6 +169,12 @@ export const generateArticleStructure = async (
     TAREFA: Baseado no tópico "${topic}" e keyword "${keyword}", gere a estrutura.
     Idioma: ${language}.
     Contexto: ${serpData.competitorTitles.join(', ')}.
+    
+    REGRAS CRÍTICAS DE TÍTULO (IMPORTANTE):
+    1. O título (title) DEVE ter no MÁXIMO 7 palavras.
+    2. Exemplo Bom: "Energia Solar: O Futuro do Brasil" (6 palavras).
+    3. Exemplo Ruim: "Tudo o que você precisa saber sobre a Energia Solar no Brasil em 2025" (14 palavras).
+    
     JSON com title, subtitle, lead.
   `;
 
@@ -235,7 +241,12 @@ export const generateMainContent = async (
     Escreva um Artigo Completo SEO sobre "${topic}".
     Palavra-chave: "${keyword}".
     Idioma: ${language}.
-    H1: "${structure.title}"
+    
+    INSTRUÇÃO OBRIGATÓRIA DE TÍTULO (H1):
+    1. O artigo deve começar com um tag <h1>.
+    2. O conteúdo do <h1> deve ser EXATAMENTE: "${structure.title}".
+    3. NÃO altere, NÃO aumente e NÃO adicione palavras ao H1. Mantenha o limite de 7 palavras definido na estrutura.
+
     Lead: "${structure.lead}"
     
     Keywords LSI: ${serpData.lsiKeywords.join(', ')}
@@ -496,9 +507,10 @@ export const generateImageFromPrompt = async (
   const config: any = { imageConfig: { aspectRatio: aspectRatio } };
   if (model === MODEL_IMAGE_PRO) config.imageConfig.imageSize = resolution;
 
+  // FIX: Using simplified contents (string) to avoid structure errors with flash models
   const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
     model: model,
-    contents: { parts: [{ text: enhancedPrompt }] },
+    contents: enhancedPrompt,
     config: config
   }), 3, 3000);
 
@@ -508,7 +520,7 @@ export const generateImageFromPrompt = async (
     }
   }
   
-  throw new Error("No image data found");
+  throw new Error("No image data found. Model refused to generate.");
 };
 
 export const editGeneratedImage = async (
@@ -518,14 +530,18 @@ export const editGeneratedImage = async (
   const ai = getClient();
   const cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, "");
 
+  // FIX: Using Array structure for contents when mixing text and media
   const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
     model: MODEL_IMAGE_FLASH,
-    contents: {
-      parts: [
-        { inlineData: { data: cleanBase64, mimeType: 'image/jpeg' } },
-        { text: editPrompt },
-      ],
-    },
+    contents: [
+      {
+        role: 'user',
+        parts: [
+            { inlineData: { data: cleanBase64, mimeType: 'image/jpeg' } },
+            { text: editPrompt },
+        ]
+      }
+    ],
   }), 3, 3000);
 
   if (response.candidates?.[0]?.content?.parts) {
