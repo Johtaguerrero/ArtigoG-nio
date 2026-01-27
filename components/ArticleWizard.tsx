@@ -161,11 +161,9 @@ export const ArticleWizard: React.FC = () => {
       const seoData = await geminiService.generateMetadata(article.topic, article.targetKeyword, htmlBody, article.language);
 
       // Combine HTML (Video Injection)
-      // The AI now returns the full HTML including wrappers. We just need to inject video if present.
       let fullHtml = htmlBody;
       
       if (mediaData.videoData.embedHtml) {
-        // Video section flat HTML
         const videoSection = `<div class="video-container my-8">
 <h3 class="text-lg font-bold mb-2 flex items-center gap-2">Assista: ${mediaData.videoData.title}</h3>
 <div class="aspect-w-16 aspect-h-9 bg-slate-100 rounded-xl overflow-hidden shadow-sm">
@@ -174,23 +172,18 @@ ${mediaData.videoData.embedHtml}
 ${mediaData.videoData.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${mediaData.videoData.caption}</p>` : ''}
 </div>`;
         
-        // Try to insert after the lead paragraph close tag
         const leadCloseIndex = fullHtml.indexOf('</p>');
         if (leadCloseIndex !== -1) {
-            // Insert after the lead paragraph
             const insertPosition = leadCloseIndex + 4;
             fullHtml = fullHtml.slice(0, insertPosition) + "\n" + videoSection + fullHtml.slice(insertPosition);
         } else {
-            // Fallback: prepend to start of article body if possible, or just append to header
             fullHtml = fullHtml.replace('<article>', `<article>\n${videoSection}`);
         }
       }
 
-      // Trim any excess whitespace
       fullHtml = fullHtml.trim();
 
       // 6. Generate Technical SEO Data (Schema & WP JSON)
-      // Construct temp article object to pass to generator
       const tempArticle: ArticleData = {
           ...article,
           title: structure.title,
@@ -223,7 +216,27 @@ ${mediaData.videoData.caption ? `<p class="text-sm text-slate-500 mt-2 italic">$
 
     } catch (e: any) {
       console.error(e);
-      setError("Falha na geração: " + (e.message || "Erro desconhecido"));
+      // Tentar parsear mensagem de erro JSON da API
+      let displayError = e.message || "Erro desconhecido";
+      try {
+        // Se a mensagem contiver JSON, tenta extrair a mensagem "message" interna
+        const jsonMatch = displayError.match(/\{.*\}/s);
+        if (jsonMatch) {
+            const errorObj = JSON.parse(jsonMatch[0]);
+            if (errorObj.error && errorObj.error.message) {
+                displayError = errorObj.error.message;
+            }
+        }
+      } catch (parseErr) {
+          // Mantém a mensagem original se falhar
+      }
+      
+      // Tradução amigável para erros comuns
+      if (displayError.includes('429') || displayError.includes('Quota exceeded')) {
+          displayError = "Limite de cota excedido (Erro 429). A IA está sobrecarregada ou você atingiu o limite diário gratuito. Tente novamente mais tarde ou verifique sua API Key.";
+      }
+
+      setError(displayError);
       setCurrentStep(1); // Go back to edit
     } finally {
       setIsGenerating(false);
@@ -563,8 +576,8 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
       
       {error && (
         <div className="mt-6 p-4 bg-red-50 text-red-700 rounded-lg border border-red-200 flex items-center gap-2">
-          <AlertCircle size={20} />
-          <span>{error}</span>
+          <AlertCircle size={20} className="shrink-0" />
+          <span className="text-sm">{error}</span>
         </div>
       )}
 
@@ -860,7 +873,19 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
                          <div className="flex justify-between items-center mb-3">
                            <div className="flex items-center gap-2">
                              <span className="bg-slate-100 text-slate-700 px-2 py-1 rounded text-xs font-bold uppercase">{img.role}</span>
-                             <span className="text-xs text-slate-400 font-mono">{img.aspectRatio}</span>
+                             <select 
+                                value={img.aspectRatio} 
+                                onChange={(e) => {
+                                    const newSpecs = [...(article.imageSpecs || [])];
+                                    newSpecs[idx] = { ...newSpecs[idx], aspectRatio: e.target.value as any };
+                                    setArticle({ ...article, imageSpecs: newSpecs });
+                                }}
+                                className="text-xs bg-slate-50 border border-slate-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+                             >
+                                {['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9'].map(ratio => (
+                                    <option key={ratio} value={ratio}>{ratio}</option>
+                                ))}
+                             </select>
                            </div>
                            <div className="flex gap-2">
                               {img.url && img.url.startsWith('data:') && (
@@ -1173,30 +1198,3 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
       </div>
     );
   };
-
-  return (
-    <div className="p-4 md:p-8 max-w-7xl mx-auto min-h-screen">
-      <div className="mb-12 max-w-2xl mx-auto">
-         <div className="relative flex justify-between items-center">
-            <div className="absolute left-0 right-0 top-1/2 h-1 bg-slate-200 -z-10 rounded"></div>
-            <div 
-              className="absolute left-0 top-1/2 h-1 bg-blue-600 -z-10 rounded transition-all duration-500" 
-              style={{ width: `${((currentStep - 1) / 2) * 100}%` }}
-            ></div>
-            <StepIndicator step={1} current={currentStep} />
-            <StepIndicator step={2} current={currentStep} />
-            <StepIndicator step={3} current={currentStep} />
-         </div>
-         <div className="flex justify-between mt-2 text-xs font-medium text-slate-500">
-            <span>Configuração</span>
-            <span>Geração</span>
-            <span>Revisão</span>
-         </div>
-      </div>
-
-      {currentStep === 1 && renderStep1()}
-      {currentStep === 2 && renderProgress()}
-      {currentStep === 3 && renderReview()}
-    </div>
-  );
-};

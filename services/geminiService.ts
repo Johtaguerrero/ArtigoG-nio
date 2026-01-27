@@ -4,50 +4,24 @@ import { getBrowserApiKey } from "./storageService";
 
 // Helper to get client with dynamic key
 const getClient = () => {
-  // 1. Tenta pegar do ambiente (seguro para deploy)
-  // 2. Tenta pegar do armazenamento local (para testes rápidos ou correções manuais)
   const apiKey = process.env.API_KEY || getBrowserApiKey();
   
   if (!apiKey) {
-    console.error("API Key não encontrada. Configure a variável de ambiente API_KEY ou insira nas Configurações do App.");
-    throw new Error("Chave de API do Google ausente. Vá em 'Configurações' no menu lateral e cole sua chave API, ou configure a variável de ambiente.");
+    console.error("API Key não encontrada.");
+    throw new Error("Chave de API ausente. Vá em 'Configurações' e insira sua API Key.");
   }
 
   return new GoogleGenAI({ apiKey });
 };
 
-const MODEL_FLASH = 'gemini-3-flash-preview';
+// Configuração de Modelos
+// PRIMÁRIO: O modelo mais recente e capaz solicitado
+const MODEL_PRIMARY_TEXT = 'gemini-3-flash-preview'; 
+// FALLBACK: Modelo estável com limites de cota maiores (Gemini 2.0 Flash)
+const MODEL_FALLBACK_TEXT = 'gemini-flash-latest'; 
+
 const MODEL_IMAGE_FLASH = 'gemini-2.5-flash-image';
 const MODEL_IMAGE_PRO = 'gemini-3-pro-image-preview';
-
-// Helper for rate limit handling with exponential backoff
-async function retryWithBackoff<T>(
-  fn: () => Promise<T>,
-  retries = 4,
-  delay = 2000,
-  factor = 2
-): Promise<T> {
-  try {
-    return await fn();
-  } catch (error: any) {
-    const isRateLimit = 
-      error?.status === 429 || 
-      error?.code === 429 || 
-      (error?.message && error.message.includes('429')) ||
-      (error?.message && error.message.includes('quota')) ||
-      (error?.status === 'RESOURCE_EXHAUSTED') ||
-      (error?.status === 503) || 
-      (error?.message && error.message.includes('overloaded')) ||
-      (error?.message && error.message.includes('UNAVAILABLE'));
-
-    if (retries > 0 && isRateLimit) {
-      console.warn(`Serviço ocupado (Quota/Overload). Tentando novamente em ${delay}ms... (${retries} tentativas restantes)`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-      return retryWithBackoff(fn, retries - 1, delay * factor, factor);
-    }
-    throw error;
-  }
-}
 
 // --- SYSTEM PERSONA ---
 const ARTIGO_GENIO_PERSONA = `
@@ -65,29 +39,95 @@ SEMPRE siga estas regras:
 4. Parágrafos curtos e escaneáveis.
 `;
 
+/**
+ * Função Wrapper inteligente que tenta o modelo primário e, 
+ * se falhar por Cota (429) ou Sobrecarga (503), tenta o modelo de fallback.
+ */
+async function generateSmartContent(
+  model: string, 
+  contents: any, 
+  config: any,
+  fallbackModel: string = MODEL_FALLBACK_TEXT
+): Promise<GenerateContentResponse> {
+  const ai = getClient();
+
+  const runRequest = async (targetModel: string) => {
+    return await ai.models.generateContent({
+      model: targetModel,
+      contents,
+      config
+    });
+  };
+
+  try {
+    // Tentativa 1: Modelo Primário (Gemini 3)
+    return await retryWithBackoff(() => runRequest(model), 2, 1000);
+  } catch (error: any) {
+    // Verifica se é erro de Cota (429) ou Serviço Indisponível (503)
+    const isQuotaOrLoadError = 
+      error?.status === 429 || 
+      error?.code === 429 || 
+      (error?.message && error.message.includes('429')) ||
+      (error?.message && error.message.includes('quota')) ||
+      (error?.message && error.message.includes('RESOURCE_EXHAUSTED')) ||
+      error?.status === 503;
+
+    if (isQuotaOrLoadError && model !== fallbackModel) {
+      console.warn(`Modelo ${model} falhou por cota/carga. Tentando fallback para ${fallbackModel}...`);
+      // Tentativa 2: Modelo Fallback (Gemini Flash Estável)
+      // Removemos configs específicas do Gemini 3 que podem não existir no anterior (ex: thinkingConfig se necessário, mas flash-latest suporta bem)
+      const cleanConfig = { ...config };
+      if (cleanConfig.thinkingConfig && fallbackModel.includes('1.5')) {
+          delete cleanConfig.thinkingConfig; // Remove thinking se o fallback for muito antigo (não é o caso do flash-latest/2.0)
+      }
+      return await retryWithBackoff(() => runRequest(fallbackModel), 2, 2000);
+    }
+    throw error;
+  }
+}
+
+// Helper for rate limit handling with exponential backoff
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  retries = 3,
+  delay = 2000,
+  factor = 2
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (error: any) {
+    const isRetryable = 
+      error?.status === 429 || 
+      error?.status === 503 || 
+      (error?.message && (error.message.includes('429') || error.message.includes('overloaded') || error.message.includes('fetch')));
+
+    if (retries > 0 && isRetryable) {
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return retryWithBackoff(fn, retries - 1, delay * factor, factor);
+    }
+    throw error;
+  }
+}
+
 export const analyzeSerp = async (keyword: string, language: string = 'Português'): Promise<SerpAnalysisResult> => {
   try {
-    const ai = getClient();
-    const result = await retryWithBackoff<GenerateContentResponse>(async () => {
-        const response = await ai.models.generateContent({
-            model: MODEL_FLASH,
-            contents: `
-            ${ARTIGO_GENIO_PERSONA}
-            
-            TAREFA: Realizar análise SERP Profunda para a palavra-chave: "${keyword}".
-            Idioma: ${language}.
-            
-            Retorne um JSON com:
-            1. Títulos dos 3 principais concorrentes (em ${language}).
-            2. Lacunas de conteúdo (O que falta neles?).
-            3. Perguntas "People Also Ask" (PAA) para usar em FAQ.
-            4. Keywords LSI (Latent Semantic Indexing) para enriquecer o texto.
-            5. Estratégia (Um parágrafo curto explicando como superar esses concorrentes via E-E-A-T e qualidade de conteúdo).
-            `,
-            config: {
-                tools: [{ googleSearch: {} }],
-                responseMimeType: "application/json",
-                responseSchema: {
+    const result = await generateSmartContent(
+        MODEL_PRIMARY_TEXT,
+        `
+        ${ARTIGO_GENIO_PERSONA}
+        TAREFA: Realizar análise SERP Profunda para a palavra-chave: "${keyword}".
+        Idioma: ${language}.
+        Retorne um JSON com:
+        1. Títulos dos 3 principais concorrentes.
+        2. Lacunas de conteúdo.
+        3. Perguntas PAA.
+        4. Keywords LSI.
+        5. Estratégia curta.
+        `,
+        {
+            tools: [{ googleSearch: {} }],
+            responseMimeType: "application/json",
+            responseSchema: {
                 type: Type.OBJECT,
                 properties: {
                     competitorTitles: { type: Type.ARRAY, items: { type: Type.STRING } },
@@ -96,11 +136,9 @@ export const analyzeSerp = async (keyword: string, language: string = 'Portuguê
                     lsiKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
                     strategy: { type: Type.STRING }
                 }
-                }
             }
-        });
-        return response;
-    });
+        }
+    );
 
     if (result.text) {
       return JSON.parse(result.text) as SerpAnalysisResult;
@@ -126,26 +164,17 @@ export const generateArticleStructure = async (
 ): Promise<{ title: string; subtitle: string; lead: string }> => {
   const prompt = `
     ${ARTIGO_GENIO_PERSONA}
-    
-    TAREFA: Baseado no tópico "${topic}" e keyword "${keyword}", gere a estrutura inicial.
-    Idioma de saída: ${language}.
-    
-    Contexto SERP (Superar estes): ${serpData.competitorTitles.join(', ')}.
-
-    Requisitos:
-    1. Title (H1): Máx 60 chars, deve conter a keyword no início ou meio. Alta taxa de clique (CTR).
-    2. Subtitle: Engajador, máx 150 chars.
-    3. Lead (Lide Jornalístico): A keyword "${keyword}" OBRIGATORIAMENTE deve aparecer nos primeiros 50-100 caracteres. Responda: O que, Quem, Quando, Onde, Por que.
-    
-    Formato JSON.
+    TAREFA: Baseado no tópico "${topic}" e keyword "${keyword}", gere a estrutura.
+    Idioma: ${language}.
+    Contexto: ${serpData.competitorTitles.join(', ')}.
+    JSON com title, subtitle, lead.
   `;
 
   try {
-    const ai = getClient();
-    const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-      model: MODEL_FLASH,
-      contents: prompt,
-      config: {
+    const response = await generateSmartContent(
+      MODEL_PRIMARY_TEXT,
+      prompt,
+      {
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -156,7 +185,7 @@ export const generateArticleStructure = async (
           }
         }
       }
-    }));
+    );
 
     if (!response.text) throw new Error("Structure generation failed");
     return JSON.parse(response.text);
@@ -178,161 +207,61 @@ export const generateMainContent = async (
   authorName?: string
 ): Promise<string> => {
   
-  const ai = getClient();
-  
-  // Internal linking strategy
+  // Internal link search (Auxiliary, can fail safely)
   let internalLinksContext = "";
   if (siteUrl) {
     try {
         const domain = siteUrl.replace(/^https?:\/\//, '').split('/')[0];
-        // Wrapped internal search with retry as well
-        const linkSearch = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-            model: MODEL_FLASH,
-            contents: `Search site:${domain} for 3 articles related to "${keyword}". Return JSON list with 'title' and 'url'.`,
-            config: { 
+        const linkSearch = await generateSmartContent(
+            MODEL_PRIMARY_TEXT,
+            `Search site:${domain} for 3 articles related to "${keyword}". Return JSON list with 'title' and 'url'.`,
+            { 
                 tools: [{ googleSearch: {} }],
                 responseMimeType: "application/json"
             }
-        }), 2, 1000); // fewer retries for this auxiliary task
-        
+        );
         const links = linkSearch.text ? JSON.parse(linkSearch.text) : [];
         if (Array.isArray(links) && links.length > 0) {
-            internalLinksContext = `
-            LINKS INTERNOS OBRIGATÓRIOS:
-            - Insira estes links naturalmente no texto âncora adequado.
-            - Crie uma seção <section><h2>Veja Também</h2><ul> (ou tradução para ${language}) com a lista <ul> dos links.
-            - Links: ${JSON.stringify(links)}
-            `;
+            internalLinksContext = `LINKS INTERNOS: ${JSON.stringify(links)}`;
         }
-    } catch (e) { console.warn("Internal link search failed or skipped", e); }
+    } catch (e) { console.warn("Link search skipped", e); }
   }
 
   const prompt = `
     ${ARTIGO_GENIO_PERSONA}
-
-    ========================================================
-    0) ENTRADAS
-    ========================================================
-    tipo_artigo: Artigo Completo SEO
-    tema: "${topic}"
-    palavra_chave: "${keyword}"
-    autor: "${authorName || 'Redação'}"
-    tamanho_artigo: ${wordCount} palavras
-    site_base: "${siteUrl || ''}"
     
-    DADOS ESTRUTURAIS JÁ GERADOS (USE ESTES):
+    Escreva um Artigo Completo SEO sobre "${topic}".
+    Palavra-chave: "${keyword}".
+    Idioma: ${language}.
     H1: "${structure.title}"
     Lead: "${structure.lead}"
     
-    DADOS SEO:
     Keywords LSI: ${serpData.lsiKeywords.join(', ')}
     Perguntas PAA: ${serpData.questions.join(', ')}
 
-    opcoes_avancadas:
-      incluir_sumario: ${options.includeToc}
-      incluir_glossario: ${options.includeGlossary}
-      incluir_tabelas: ${options.includeTables}
-      incluir_listas: ${options.includeLists}
-      fontes_seguras: ${options.secureSources}
-      creditos_autores: ${options.authorCredits}
-    
+    Opções: TOC=${options.includeToc}, Glossario=${options.includeGlossary}.
     ${internalLinksContext}
 
-    ========================================================
-    1) REGRAS CRÍTICAS (NÃO NEGOCIÁVEIS)
-    ========================================================
-    A) SAÍDA SEM DUPLICAÇÃO:
-    - Gere APENAS 1 (um) bloco HTML final.
-    - Proibido repetir wrappers (ex: <div class="artigogenio-content"> duplicado).
-    - Proibido inserir placeholders e comentários HTML (ex: <!-- JS would generate TOC -->).
-    - Proibido criar dois TOCs. TOC deve existir no máximo 1 vez, e só se incluir_sumario=true.
-
-    B) SEO OBRIGATÓRIO:
-    - A palavra-chave "${keyword}" deve aparecer nos primeiros 100 caracteres do lead.
-    - Exatamente 1 H1 por artigo (já fornecido).
-    - Densidade da palavra-chave alvo: 0.8% a 1.2%.
-    - Texto escaneável: parágrafos curtos (máx. 4 linhas).
-
-    C) HTML SEGURO PARA BASE44 (WORDPRESS):
-    - Não use <script> nem <style>.
-    - Garanta tags fechadas corretamente.
-    - Use IDs únicos (kebab-case) em TODOS os H2/H3 quando TOC estiver ligado.
-
-    ========================================================
-    2) MONTAGEM DO HTML (MODELO OBRIGATÓRIO)
-    ========================================================
-    Você deve retornar UMA STRING contendo EXATAMENTE esta estrutura (preenchendo o conteúdo):
-
-    <div class="artigogenio-content">
-      <article>
-        <header>
-          <h1>${structure.title}</h1>
-          <p class="lead text-lg text-slate-600 mb-8 font-medium">${structure.lead}</p>
-        </header>
-
-        ${options.includeToc ? `<nav class="toc bg-slate-50 p-6 rounded-lg mb-8 border border-slate-200" aria-label="Sumário">
-          <h2 class="text-lg font-bold mb-4">Índice</h2>
-          <ul>
-            <!-- Gere os itens do índice (li > a[href]) apontando para os IDs das seções abaixo -->
-          </ul>
-        </nav>` : ''}
-
-        <section id="introducao">
-          <h2>Introdução</h2>
-          <p>...</p>
-        </section>
-
-        <!-- GERE O CORPO DO ARTIGO AQUI COM VÁRIAS SECTIONS, H2, H3, P, UL, TABLE -->
-
-        <section id="faq">
-          <h2>Perguntas frequentes</h2>
-          <!-- Responda as PAA aqui -->
-        </section>
-
-        ${options.includeGlossary ? `<section id="glossario">
-          <h2>Glossário</h2>
-          <dl>
-            <!-- Termos e definições -->
-          </dl>
-        </section>` : ''}
-
-        <footer id="autor" class="mt-8 pt-6 border-t border-slate-200">
-          <p><strong>Escrito por:</strong> ${authorName || 'Redação'}</p>
-          <p class="text-sm text-slate-500">Conteúdo revisado e otimizado para ${language}.</p>
-        </footer>
-      </article>
-    </div>
-
-    ========================================================
-    3) SAÍDA FINAL
-    ========================================================
-    Retorne APENAS o código HTML puro (sem \`\`\`html ou \`\`\`).
-    NÃO retorne JSON.
+    Retorne APENAS HTML puro dentro de <div class="artigogenio-content"><article>... </article></div>.
+    Sem markdown block.
   `;
 
   try {
-      const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-        model: MODEL_FLASH,
-        contents: prompt,
-        config: { 
-            // Thinking budget ajuda a estruturar artigos longos e complexos
-            thinkingConfig: { thinkingBudget: 4096 }, // Increased for complex HTML structure
+      const response = await generateSmartContent(
+        MODEL_PRIMARY_TEXT,
+        prompt,
+        { 
+            // Thinking budget ajuda na estruturação, mas se o modelo primário falhar,
+            // o fallback (2.0) vai ignorar ou usar padrão.
+            thinkingConfig: { thinkingBudget: 4096 }, 
             maxOutputTokens: 8192, 
         } 
-      }));
+      );
 
-      // NOTE: response.text is a property getter, not a function!
       let html = response.text || "";
-      
-      // LIMPEZA ROBUSTA PARA WORDPRESS
       const markdownMatch = html.match(/```html([\s\S]*?)```/i) || html.match(/```([\s\S]*?)```/);
-      if (markdownMatch) {
-          html = markdownMatch[1];
-      }
-
-      // Remover tags indesejadas externas se a IA alucinar e colocar html/body
-      html = html.replace(/<\/?(html|body|head)[^>]*>/gi, '');
-      html = html.replace(/```/g, '');
+      if (markdownMatch) html = markdownMatch[1];
+      html = html.replace(/<\/?(html|body|head)[^>]*>/gi, '').replace(/```/g, '');
 
       return html.trim();
   } catch (error) {
@@ -347,37 +276,11 @@ export const generateMetadata = async (
     htmlContent: string,
     language: string
 ): Promise<SeoData> => {
-    const ai = getClient();
-    const prompt = `
-        ${ARTIGO_GENIO_PERSONA}
-        
-        Analise o artigo sobre "${topic}" e gere o SEO COMPLETO (YOAST / GOOGLE STANDARD).
-        
-        Palavra-chave foco: "${keyword}".
-        Idioma: ${language}.
-        
-        REQUISITOS ESTRITOS (JSON):
-        1. seoTitle: Máx 60 caracteres. A palavra-chave "${keyword}" DEVE estar no INÍCIO.
-        2. metaDescription: Máx 156 caracteres. A palavra-chave "${keyword}" DEVE estar nos primeiros 100 caracteres. Deve ser persuasiva (CTA).
-        3. slug: URL amigável, curta, hifenizada, sem stop-words.
-        4. targetKeyword: A própria palavra-chave.
-        5. synonyms: Exatamente 4 sinônimos relevantes encontrados no texto ou contexto.
-        6. relatedKeyphrase: Uma frase-chave relacionada (cauda longa).
-        7. tags: Exatamente 10 tags relevantes para WordPress.
-        8. lsiKeywords: 5 palavras LSI usadas.
-        9. opportunities: Objeto contendo:
-           - featuredSnippet: Texto curto explicando como o artigo pode ganhar o snippet zero (ex: "Use uma lista no H2...").
-           - paa: Lista de perguntas PAA abordadas.
-           - googleNews: Sugestão de ângulo para Google News (Top Stories).
-        
-        Formato JSON.
-    `;
-
     try {
-        const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-            model: MODEL_FLASH,
-            contents: prompt,
-            config: {
+        const response = await generateSmartContent(
+            MODEL_PRIMARY_TEXT,
+            `Gere SEO JSON (yoast) para artigo "${topic}", keyword "${keyword}", idioma ${language}.`,
+            {
                 responseMimeType: "application/json",
                 responseSchema: {
                     type: Type.OBJECT,
@@ -401,30 +304,21 @@ export const generateMetadata = async (
                     }
                 }
             }
-        }));
+        );
 
-        if (response.text) {
-             return JSON.parse(response.text);
-        }
-    } catch (e) {
-        console.error("Metadata generation failed", e);
-    }
+        if (response.text) return JSON.parse(response.text);
+    } catch (e) { console.error("Metadata gen failed", e); }
     
-    // Fallback seguro
     return {
-        seoTitle: `${keyword}: Guia Completo e Atualizado`,
-        metaDescription: `Saiba tudo sobre ${keyword}. Confira este guia completo com as melhores informações, dicas e novidades atualizadas sobre o tema.`,
+        seoTitle: `${keyword}: Guia Completo`,
+        metaDescription: `Saiba tudo sobre ${keyword}.`,
         slug: keyword.toLowerCase().replace(/ /g, '-'),
         targetKeyword: keyword,
         synonyms: [],
         relatedKeyphrase: "",
         tags: [],
         lsiKeywords: [],
-        opportunities: {
-            featuredSnippet: "",
-            paa: [],
-            googleNews: ""
-        }
+        opportunities: { featuredSnippet: "", paa: [], googleNews: "" }
     };
 };
 
@@ -433,32 +327,11 @@ export const generateMediaStrategy = async (
   keyword: string,
   language: string
 ): Promise<{ videoData: VideoData, imageSpecs: ImageSpec[] }> => {
-  const ai = getClient();
-  const prompt = `
-    ${ARTIGO_GENIO_PERSONA}
-    
-    Crie a estratégia visual para o artigo: "${title}".
-    
-    1. VIDEO: Encontre o melhor termo de busca para YouTube em ${language}.
-    
-    2. IMAGENS (Fotojornalismo Profissional):
-       Gere 4 especificações de imagem.
-       - Prompt: EM INGLÊS (Midjourney style, highly detailed, photorealistic, cinematic lighting).
-       - Roles: 'hero' (16:9), 'social' (1:1), 'feed' (3:4), 'detail' (4:3).
-       - SEO COMPLETO OBRIGATÓRIO (em ${language}):
-          - Alt text: Descritivo para acessibilidade e SEO (contendo keyword).
-          - Title: Título informativo para tooltip.
-          - Caption: Legenda jornalística explicativa para ir abaixo da imagem.
-          - Filename: nome-do-arquivo-com-keyword.jpg (kebab-case, sem acentos).
-       
-    Retorne JSON.
-  `;
-
   try {
-      const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-        model: MODEL_FLASH,
-        contents: prompt,
-        config: {
+      const response = await generateSmartContent(
+        MODEL_PRIMARY_TEXT,
+        `Estratégia visual (JSON) para "${title}". 1 termo busca youtube. 4 specs imagens (hero, social, feed, detail) com prompts em ingles e alt/caption em ${language}.`,
+        {
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -492,20 +365,12 @@ export const generateMediaStrategy = async (
             }
           }
         }
-      }));
+      );
 
-      // NOTE: response.text is a property getter, not a function!
-      if (response.text) {
-          return JSON.parse(response.text);
-      }
-  } catch (e) {
-      console.error("Media generation failed", e);
-  }
+      if (response.text) return JSON.parse(response.text);
+  } catch (e) { console.error("Media gen failed", e); }
 
-  return {
-      videoData: { query: keyword, title: "", channel: "", url: "", embedHtml: "" },
-      imageSpecs: []
-  };
+  return { videoData: { query: keyword, title: "", channel: "", url: "", embedHtml: "" }, imageSpecs: [] };
 };
 
 export const generateTechnicalSeo = (
@@ -519,7 +384,6 @@ export const generateTechnicalSeo = (
     const authorName = author?.name || "Redação";
     const authorUrl = author?.photoUrl || "";
     
-    // 1. Construct Schema JSON-LD
     const heroImage = article.imageSpecs?.find(i => i.role === 'hero');
     const imageUrl = heroImage?.url && !heroImage.url.startsWith('data:') ? heroImage.url : `${siteUrl}/default-image.jpg`;
 
@@ -531,10 +395,7 @@ export const generateTechnicalSeo = (
                 "@id": `${siteUrl}/#organization`,
                 "name": "ArtigoGênio Publisher",
                 "url": siteUrl,
-                "logo": {
-                    "@type": "ImageObject",
-                    "url": `${siteUrl}/logo.png`
-                }
+                "logo": { "@type": "ImageObject", "url": `${siteUrl}/logo.png` }
             },
             {
                 "@type": "WebSite",
@@ -555,28 +416,15 @@ export const generateTechnicalSeo = (
                 "@type": "BreadcrumbList",
                 "@id": `${permalink}/#breadcrumb`,
                 "itemListElement": [
-                    {
-                        "@type": "ListItem",
-                        "position": 1,
-                        "name": "Home",
-                        "item": siteUrl
-                    },
-                    {
-                        "@type": "ListItem",
-                        "position": 2,
-                        "name": article.title
-                    }
+                    { "@type": "ListItem", "position": 1, "name": "Home", "item": siteUrl },
+                    { "@type": "ListItem", "position": 2, "name": article.title }
                 ]
             },
             {
                 "@type": ["Article", "NewsArticle"],
                 "@id": `${permalink}/#article`,
                 "isPartOf": { "@id": permalink },
-                "author": {
-                    "@type": "Person",
-                    "name": authorName,
-                    "url": authorUrl
-                },
+                "author": { "@type": "Person", "name": authorName, "url": authorUrl },
                 "headline": article.seoData?.seoTitle || article.title,
                 "datePublished": now,
                 "dateModified": now,
@@ -590,7 +438,6 @@ export const generateTechnicalSeo = (
         ]
     };
 
-    // Add VideoObject if available
     if (article.videoData && article.videoData.title) {
         (schemaGraph["@graph"] as any[]).push({
             "@type": "VideoObject",
@@ -603,29 +450,24 @@ export const generateTechnicalSeo = (
         });
     }
 
-    // Add FAQPage if PAA exists
     if (article.seoData?.opportunities?.paa?.length) {
         (schemaGraph["@graph"] as any[]).push({
             "@type": "FAQPage",
             "mainEntity": article.seoData.opportunities.paa.map(q => ({
                 "@type": "Question",
                 "name": q,
-                "acceptedAnswer": {
-                    "@type": "Answer",
-                    "text": "Resposta detalhada disponível no conteúdo do artigo." // Placeholder valid
-                }
+                "acceptedAnswer": { "@type": "Answer", "text": "Resposta detalhada disponível no conteúdo do artigo." }
             }))
         });
     }
 
-    // 2. Construct WordPress JSON
     const wpPayload = {
         title: article.title,
         content: article.htmlContent,
         status: "draft",
         slug: article.seoData?.slug,
         excerpt: article.seoData?.metaDescription,
-        categories: [1], // Default placeholder category ID
+        categories: [1], 
         tags: article.seoData?.tags || [],
         meta: {
             yoast_wpseo_title: article.seoData?.seoTitle,
@@ -650,30 +492,18 @@ export const generateImageFromPrompt = async (
   const ai = getClient();
   const enhancedPrompt = `${prompt} . Professional photojournalism, realistic, 8k, highly detailed.`;
 
-  const config: any = {
-    imageConfig: {
-      aspectRatio: aspectRatio
-    }
-  };
+  const config: any = { imageConfig: { aspectRatio: aspectRatio } };
+  if (model === MODEL_IMAGE_PRO) config.imageConfig.imageSize = resolution;
 
-  if (model === MODEL_IMAGE_PRO) {
-      config.imageConfig.imageSize = resolution;
-  }
-
-  // Rate limiting for images is often stricter, using slightly larger delay
   const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
     model: model,
-    contents: {
-      parts: [{ text: enhancedPrompt }]
-    },
+    contents: { parts: [{ text: enhancedPrompt }] },
     config: config
   }), 3, 3000);
 
   if (response.candidates?.[0]?.content?.parts) {
     for (const part of response.candidates[0].content.parts) {
-      if (part.inlineData && part.inlineData.data) {
-        return part.inlineData.data;
-      }
+      if (part.inlineData && part.inlineData.data) return part.inlineData.data;
     }
   }
   
@@ -699,9 +529,7 @@ export const editGeneratedImage = async (
 
   if (response.candidates?.[0]?.content?.parts) {
     for (const part of response.candidates[0].content.parts) {
-      if (part.inlineData && part.inlineData.data) {
-        return part.inlineData.data;
-      }
+      if (part.inlineData && part.inlineData.data) return part.inlineData.data;
     }
   }
 
@@ -709,23 +537,16 @@ export const editGeneratedImage = async (
 };
 
 export const findRealYoutubeVideo = async (query: string): Promise<VideoData> => {
-  const ai = getClient();
-  
   const prompt = `
     Find the most relevant YouTube video for the search query: "${query}".
-    
-    Return a JSON object with:
-    1. title: The exact title of the video.
-    2. channel: The channel name.
-    3. url: The watch URL (must be valid youtube.com/watch?v=...).
-    4. caption: A professional journalistic caption (in the language of the query) explaining the video's relevance.
-    5. altText: A descriptive alt text for screen readers describing the video context.
+    Return a JSON object with title, channel, url (valid youtube watch url), caption (journalistic in pt-br), altText.
   `;
 
-  const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
-    model: MODEL_FLASH,
-    contents: prompt,
-    config: {
+  // Aqui usamos diretamente o fallback (Flash Stable) porque a busca do Google consome muita cota
+  const response = await generateSmartContent(
+    MODEL_FALLBACK_TEXT, 
+    prompt,
+    {
       tools: [{ googleSearch: {} }],
       responseMimeType: "application/json",
       responseSchema: {
@@ -739,7 +560,7 @@ export const findRealYoutubeVideo = async (query: string): Promise<VideoData> =>
         }
       }
     }
-  }));
+  );
 
   if (!response.text) throw new Error("Video search failed");
   
