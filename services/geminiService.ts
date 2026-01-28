@@ -502,6 +502,16 @@ export const generateTechnicalSeo = (
     };
 };
 
+// Map unsupported aspect ratios to supported ones to prevent errors
+const mapAspectRatio = (ratio: AspectRatio): string => {
+    switch (ratio) {
+        case '2:3': return '3:4';
+        case '3:2': return '4:3';
+        case '21:9': return '16:9';
+        default: return ratio;
+    }
+}
+
 export const generateImageFromPrompt = async (
   prompt: string, 
   aspectRatio: AspectRatio = "1:1",
@@ -511,23 +521,38 @@ export const generateImageFromPrompt = async (
   const ai = getClient();
   const enhancedPrompt = `${prompt} . Professional photojournalism, realistic, 8k, highly detailed.`;
 
-  const config: any = { imageConfig: { aspectRatio: aspectRatio } };
-  if (model === MODEL_IMAGE_PRO) config.imageConfig.imageSize = resolution;
+  // Fix: Ensure we use a supported aspect ratio
+  const safeAspectRatio = mapAspectRatio(aspectRatio);
+  const config: any = { imageConfig: { aspectRatio: safeAspectRatio } };
+  
+  if (model === MODEL_IMAGE_PRO) {
+      config.imageConfig.imageSize = resolution;
+  }
 
-  // FIX: Using simplified contents (string) to avoid structure errors with flash models
+  // FIX: Using explicit content structure to avoid structure errors with flash models
   const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
     model: model,
-    contents: enhancedPrompt,
+    contents: { parts: [{ text: enhancedPrompt }] },
     config: config
   }), 3, 3000);
 
-  if (response.candidates?.[0]?.content?.parts) {
-    for (const part of response.candidates[0].content.parts) {
+  // Check safety/finish reason
+  if (!response.candidates || response.candidates.length === 0) {
+      throw new Error("A IA não retornou nenhuma imagem. Verifique sua API Key ou Cotas.");
+  }
+  
+  const candidate = response.candidates[0];
+  if (candidate.finishReason && candidate.finishReason !== 'STOP') {
+      throw new Error(`Geração interrompida. Motivo: ${candidate.finishReason} (Possível filtro de segurança)`);
+  }
+
+  if (candidate.content?.parts) {
+    for (const part of candidate.content.parts) {
       if (part.inlineData && part.inlineData.data) return part.inlineData.data;
     }
   }
   
-  throw new Error("No image data found. Model refused to generate.");
+  throw new Error("Nenhum dado de imagem encontrado na resposta.");
 };
 
 export const editGeneratedImage = async (
@@ -557,15 +582,24 @@ export const editGeneratedImage = async (
     }
   }
 
-  throw new Error("Image edit failed");
+  throw new Error("Falha ao editar a imagem.");
 };
 
 export const findRealYoutubeVideo = async (query: string): Promise<VideoData> => {
   const prompt = `
-    Find the most relevant YouTube video for the search query: "${query}".
-    CRITICAL: You MUST return a direct 'watch' URL (e.g., youtube.com/watch?v=...).
-    Do NOT return channel URLs or playlist URLs.
-    Return a JSON object with title, channel, url (valid youtube watch url), caption (journalistic in pt-br), altText.
+    Search for a high-quality, journalistic, and informative YouTube video relevant to the query: "${query}".
+    
+    CRITICAL CRITERIA:
+    1. MUST be a direct 'watch' URL (youtube.com/watch?v=...). No channels/playlists.
+    2. Content MUST be safe for AdSense (no age restriction, no hate speech, no controversy).
+    3. Preference for official channels, news outlets, or educational creators.
+    
+    Return a JSON object with:
+    - title
+    - channel
+    - url (valid youtube watch url)
+    - caption (Write a professional, journalistic caption in Portuguese describing why this video is relevant).
+    - altText (Accessibility description).
   `;
 
   // Aqui usamos diretamente o fallback (Flash Stable) porque a busca do Google consome muita cota

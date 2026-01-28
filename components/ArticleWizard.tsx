@@ -442,7 +442,7 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
       saveArticle(updatedArticle);
       
       // Feedback visual
-      alert("Vídeo encontrado e inserido no artigo com sucesso!");
+      alert("Vídeo jornalístico e seguro encontrado e inserido com sucesso!");
 
     } catch (e) {
       console.error(e);
@@ -919,7 +919,7 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
                                 }}
                                 className="text-xs bg-slate-50 border border-slate-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-blue-500 font-mono"
                              >
-                                {['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9'].map(ratio => (
+                                {['1:1', '3:4', '4:3', '9:16', '16:9'].map(ratio => (
                                     <option key={ratio} value={ratio}>{ratio}</option>
                                 ))}
                              </select>
