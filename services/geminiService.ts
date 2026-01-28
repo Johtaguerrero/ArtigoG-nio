@@ -56,13 +56,11 @@ const cleanAndParseJSON = (text: string | undefined): any => {
     }
     
     // 2. Encontrar limites do JSON (Objeto {} ou Array [])
-    // Isso é crucial pois a IA pode retornar [ ... ] ou { ... } dependendo do prompt
     const firstBrace = cleanText.indexOf('{');
     const firstBracket = cleanText.indexOf('[');
     
     let start = -1;
     
-    // Determina onde começa (o que aparecer primeiro, ignorando -1)
     if (firstBrace !== -1 && firstBracket !== -1) {
         start = Math.min(firstBrace, firstBracket);
     } else if (firstBrace !== -1) {
@@ -76,7 +74,6 @@ const cleanAndParseJSON = (text: string | undefined): any => {
     
     let end = -1;
 
-    // Determina onde termina (o que aparecer por último)
     if (lastBrace !== -1 && lastBracket !== -1) {
         end = Math.max(lastBrace, lastBracket);
     } else if (lastBrace !== -1) {
@@ -85,7 +82,6 @@ const cleanAndParseJSON = (text: string | undefined): any => {
         end = lastBracket;
     }
     
-    // Se encontrou limites válidos, recorta o texto
     if (start !== -1 && end !== -1 && end > start) {
         cleanText = cleanText.substring(start, end + 1);
     }
@@ -146,37 +142,98 @@ async function generateSmartContent(
     // Tentativa 1: Modelo Primário
     return await retryWithBackoff(() => runRequest(model, config), 2, 2000);
   } catch (error: any) {
-    // Verifica erros de cota (429) ou modelo não encontrado (404)
     const isRecoverableError = 
       error?.status === 429 || 
       error?.code === 429 || 
-      error?.status === 404 || // Model not found
-      error?.code === 404 ||   // Model not found
+      error?.status === 404 || 
+      error?.code === 404 ||   
       (error?.message && error.message.includes('429')) ||
       (error?.message && error.message.includes('quota')) ||
       (error?.message && error.message.includes('RESOURCE_EXHAUSTED')) ||
-      (error?.message && error.message.includes('NOT_FOUND')) || // Catch message text for 404
+      (error?.message && error.message.includes('NOT_FOUND')) ||
       error?.status === 503;
 
     if (isRecoverableError && model !== fallbackModel) {
       console.warn(`Modelo ${model} falhou (Erro ${error.status || error.code || 'Desconhecido'}). Tentando fallback para ${fallbackModel}...`);
       
-      // Limpeza de Config: Thinking Config pode não ser suportado em modelos mais antigos/estáveis
       const cleanConfig = { ...config };
       if (cleanConfig.thinkingConfig) {
           delete cleanConfig.thinkingConfig;
       }
 
-      // Tentativa 2: Modelo Fallback com delay maior
       return await retryWithBackoff(() => runRequest(fallbackModel, cleanConfig), 2, 4000);
     }
     throw error;
   }
 }
 
+// --- VIDEO SEARCH FUNCTION (Moved up to be accessible by generateMediaStrategy) ---
+
+export const findRealYoutubeVideo = async (query: string): Promise<VideoData> => {
+  const prompt = `
+    Context: You are a helpful news assistant.
+    Task: Search specifically for a YouTube video URL about: "${query}".
+    
+    INSTRUCTIONS:
+    1. Use the search tool to find a YouTube video.
+    2. The URL MUST be a standard watch URL: "https://www.youtube.com/watch?v=..."
+    3. Prefer high-quality, relevant content (news, educational, official channels).
+    4. Do NOT return channel URLs or playlist URLs.
+    
+    Response format (JSON only):
+    {
+      "title": "Video Title",
+      "channel": "Channel Name",
+      "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+      "caption": "Brief description of the video context.",
+      "altText": "Accessibility description."
+    }
+  `;
+
+  // Use retry logic for robustness
+  // FIX: responseMimeType cannot be used with tools
+  const response = await retryWithBackoff(() => generateSmartContent(
+    MODEL_FALLBACK_TEXT, // Use Flash for speed and reliability with tools
+    prompt,
+    {
+      tools: [{ googleSearch: {} }]
+    }
+  ));
+
+  const result = cleanAndParseJSON(response.text);
+  
+  if (!result.url) throw new Error("No URL found for the video.");
+
+  const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
+  const match = result.url.match(regExp);
+  const videoId = match ? match[1] : null;
+
+  let embedHtml = "";
+  let thumbnailUrl = "";
+
+  if (videoId) {
+     embedHtml = `<iframe width="100%" height="100%" src="https://www.youtube-nocookie.com/embed/${videoId}" title="${result.title}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+     thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+  } else {
+      throw new Error("Invalid YouTube URL format.");
+  }
+
+  return {
+    query: query,
+    title: result.title || "Video",
+    channel: result.channel || "YouTube",
+    url: result.url,
+    embedHtml: embedHtml,
+    thumbnailUrl: thumbnailUrl,
+    caption: result.caption || `Assista ao vídeo: ${query}`,
+    altText: result.altText || `Vídeo sobre ${query}`
+  };
+};
+
+// --- CORE GENERATION FUNCTIONS ---
+
 export const analyzeSerp = async (keyword: string, language: string = 'Português'): Promise<SerpAnalysisResult> => {
   try {
-    // FIX: responseMimeType: 'application/json' cannot be used with tools
     const result = await generateSmartContent(
         MODEL_PRIMARY_TEXT,
         `
@@ -204,7 +261,6 @@ export const analyzeSerp = async (keyword: string, language: string = 'Portuguê
 
   } catch (error) {
     console.error("SERP Analysis failed", error);
-    // Retorna fallback seguro em vez de quebrar tudo
     return {
       competitorTitles: [],
       contentGaps: [],
@@ -271,23 +327,16 @@ export const generateMainContent = async (
   authorName?: string
 ): Promise<string> => {
   
-  // -- BUSCA DE LINKS INTERNOS (Reforçada) --
   let internalLinksContext = "";
   
   if (siteUrl && siteUrl.trim() !== '') {
     try {
-        // Limpeza básica do domínio para usar no operador site:
         let domain = siteUrl.trim();
-        // Remove protocolo
         domain = domain.replace(/^https?:\/\//, '');
-        // Remove barra final
         if (domain.endsWith('/')) domain = domain.slice(0, -1);
-        // Se houver caminhos (ex: site.com.br/blog), pega a raiz ou usa como está
-        // Geralmente 'site:site.com' é mais seguro
         
         console.log(`Buscando links internos em: ${domain} para o tópico: ${keyword}`);
 
-        // Chamada específica para buscar links usando ferramentas
         const linkSearchResponse = await generateSmartContent(
             MODEL_PRIMARY_TEXT,
             `
@@ -302,13 +351,12 @@ export const generateMainContent = async (
             { 
                 tools: [{ googleSearch: {} }]
             },
-            MODEL_FALLBACK_TEXT // Se o primary falhar, o fallback tenta buscar (pode ter menos precisão sem tools no fallback antigo, mas ok)
+            MODEL_FALLBACK_TEXT 
         );
 
         const foundLinks = cleanAndParseJSON(linkSearchResponse.text);
 
         if (Array.isArray(foundLinks) && foundLinks.length > 0) {
-            // Validação extra: garantir que o link realmente pertence ao domínio (evitar alucinação)
             const validLinks = foundLinks.filter(l => l.url && l.url.includes(domain)).slice(0, 3);
 
             if (validLinks.length > 0) {
@@ -328,7 +376,6 @@ export const generateMainContent = async (
         }
     } catch (e) { 
         console.warn("Internal link search failed or timed out", e); 
-        // Não bloqueia a geração do artigo, apenas segue sem links
     }
   }
 
@@ -362,7 +409,6 @@ export const generateMainContent = async (
         MODEL_PRIMARY_TEXT,
         prompt,
         { 
-            // Thinking budget reduzido para economizar cotas
             thinkingConfig: { thinkingBudget: 1024 }, 
             maxOutputTokens: 8192, 
         } 
@@ -447,24 +493,19 @@ export const generateMediaStrategy = async (
   language: string
 ): Promise<{ videoData: VideoData, imageSpecs: ImageSpec[] }> => {
   try {
+      // 1. Ask LLM for Image Specs and a Video Search Query (Concept only)
       const response = await generateSmartContent(
         MODEL_PRIMARY_TEXT,
-        `Estratégia visual (JSON) para "${title}". 1 termo busca youtube. 4 specs imagens (hero, social, feed, detail) com prompts em ingles e alt/caption em ${language}.`,
+        `Estratégia visual (JSON) para "${title}". 
+         1. Defina UM termo de busca exato para encontrar um bom video no YouTube sobre o tema (campo 'videoSearchQuery').
+         2. Crie 4 specs de imagens (hero, social, feed, detail) com prompts em ingles e alt/caption em ${language}.
+         `,
         {
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
             properties: {
-              videoData: {
-                type: Type.OBJECT,
-                properties: {
-                  query: { type: Type.STRING },
-                  title: { type: Type.STRING },
-                  channel: { type: Type.STRING },
-                  url: { type: Type.STRING },
-                  embedHtml: { type: Type.STRING }
-                }
-              },
+              videoSearchQuery: { type: Type.STRING },
               imageSpecs: {
                 type: Type.ARRAY,
                 items: {
@@ -486,12 +527,30 @@ export const generateMediaStrategy = async (
         }
       );
 
-      return cleanAndParseJSON(response.text);
+      const strategy = cleanAndParseJSON(response.text);
+      const query = strategy.videoSearchQuery || title;
 
-  } catch (e) { console.error("Media gen failed", e); }
+      // 2. Perform Real Video Search based on the LLM's query to avoid hallucinated URLs
+      let realVideoData: VideoData;
+      try {
+          console.log("Searching for real video with query:", query);
+          realVideoData = await findRealYoutubeVideo(query);
+      } catch (err) {
+          console.warn("Video search failed during strategy gen:", err);
+          // Return empty video data to allow manual search later without breaking generation
+          realVideoData = { query: query, title: "", channel: "", url: "", embedHtml: "" };
+      }
 
-  // Fallback: Default query is TITLE now, not keyword, for better video matching
-  return { videoData: { query: title, title: "", channel: "", url: "", embedHtml: "" }, imageSpecs: [] };
+      return {
+          videoData: realVideoData,
+          imageSpecs: strategy.imageSpecs || []
+      };
+
+  } catch (e) { 
+      console.error("Media gen failed", e); 
+      // Total Fallback
+      return { videoData: { query: title, title: "", channel: "", url: "", embedHtml: "" }, imageSpecs: [] };
+  }
 };
 
 export const generateTechnicalSeo = (
@@ -604,7 +663,6 @@ export const generateTechnicalSeo = (
     };
 };
 
-// Map unsupported aspect ratios to supported ones to prevent errors
 const mapAspectRatio = (ratio: AspectRatio): string => {
     switch (ratio) {
         case '2:3': return '3:4';
@@ -623,7 +681,6 @@ export const generateImageFromPrompt = async (
   const ai = getClient();
   const enhancedPrompt = `${prompt} . Professional photojournalism, realistic, 8k, highly detailed.`;
 
-  // Fix: Ensure we use a supported aspect ratio
   const safeAspectRatio = mapAspectRatio(aspectRatio);
   const config: any = { imageConfig: { aspectRatio: safeAspectRatio } };
   
@@ -631,14 +688,12 @@ export const generateImageFromPrompt = async (
       config.imageConfig.imageSize = resolution;
   }
 
-  // FIX: Using explicit content structure to avoid structure errors with flash models
   const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
     model: model,
     contents: { parts: [{ text: enhancedPrompt }] },
     config: config
   }), 3, 3000);
 
-  // Check safety/finish reason
   if (!response.candidates || response.candidates.length === 0) {
       throw new Error("A IA não retornou nenhuma imagem. Verifique sua API Key ou Cotas.");
   }
@@ -664,7 +719,6 @@ export const editGeneratedImage = async (
   const ai = getClient();
   const cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, "");
 
-  // FIX: Using Array structure for contents when mixing text and media
   const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({
     model: MODEL_IMAGE_FLASH,
     contents: [
@@ -685,65 +739,4 @@ export const editGeneratedImage = async (
   }
 
   throw new Error("Falha ao editar a imagem.");
-};
-
-export const findRealYoutubeVideo = async (query: string): Promise<VideoData> => {
-  const prompt = `
-    Context: You are a helpful news assistant.
-    Task: Search specifically for a YouTube video URL about: "${query}".
-    
-    INSTRUCTIONS:
-    1. Use the search tool to find a YouTube video.
-    2. The URL MUST be a standard watch URL: "https://www.youtube.com/watch?v=..."
-    3. Prefer high-quality, relevant content (news, educational, official channels).
-    4. Do NOT return channel URLs or playlist URLs.
-    
-    Response format (JSON only):
-    {
-      "title": "Video Title",
-      "channel": "Channel Name",
-      "url": "https://www.youtube.com/watch?v=VIDEO_ID",
-      "caption": "Brief description of the video context.",
-      "altText": "Accessibility description."
-    }
-  `;
-
-  // Use retry logic for robustness
-  // FIX: responseMimeType cannot be used with tools
-  const response = await retryWithBackoff(() => generateSmartContent(
-    MODEL_FALLBACK_TEXT, // Use Flash for speed and reliability
-    prompt,
-    {
-      tools: [{ googleSearch: {} }]
-    }
-  ));
-
-  const result = cleanAndParseJSON(response.text);
-  
-  if (!result.url) throw new Error("No URL found for the video.");
-
-  const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
-  const match = result.url.match(regExp);
-  const videoId = match ? match[1] : null;
-
-  let embedHtml = "";
-  let thumbnailUrl = "";
-
-  if (videoId) {
-     embedHtml = `<iframe width="100%" height="100%" src="https://www.youtube-nocookie.com/embed/${videoId}" title="${result.title}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
-     thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
-  } else {
-      throw new Error("Invalid YouTube URL format.");
-  }
-
-  return {
-    query: query,
-    title: result.title || "Video",
-    channel: result.channel || "YouTube",
-    url: result.url,
-    embedHtml: embedHtml,
-    thumbnailUrl: thumbnailUrl,
-    caption: result.caption || `Assista ao vídeo: ${query}`,
-    altText: result.altText || `Vídeo sobre ${query}`
-  };
 };
