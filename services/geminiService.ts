@@ -17,7 +17,7 @@ const getClient = () => {
 // Configuração de Modelos
 // PRIMÁRIO: O modelo mais recente e capaz solicitado (Gemini 3 Flash Preview)
 const MODEL_PRIMARY_TEXT = 'gemini-3-flash-preview'; 
-// FALLBACK: Modelo estável com limites de cota maiores (Gemini 2.0/1.5 Flash)
+// FALLBACK: Modelo estável (gemini-flash-latest alias) para evitar erros de 404/429
 const MODEL_FALLBACK_TEXT = 'gemini-flash-latest'; 
 
 const MODEL_IMAGE_FLASH = 'gemini-2.5-flash-image';
@@ -39,11 +39,71 @@ SEMPRE siga estas regras:
 4. Parágrafos curtos e escaneáveis.
 `;
 
+// --- HELPERS ---
+
+// Helper robusto para limpar e parsear JSON da IA
+const cleanAndParseJSON = (text: string | undefined): any => {
+    if (!text || !text.trim()) {
+        throw new Error("A IA retornou uma resposta vazia (sem conteúdo).");
+    }
+
+    let cleanText = text.trim();
+
+    // 1. Remove blocos de código markdown (```json ... ``` ou apenas ``` ... ```)
+    const markdownMatch = cleanText.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+    if (markdownMatch) {
+        cleanText = markdownMatch[1].trim();
+    }
+    
+    // 2. Encontrar limites do JSON (Objeto {} ou Array [])
+    // Isso é crucial pois a IA pode retornar [ ... ] ou { ... } dependendo do prompt
+    const firstBrace = cleanText.indexOf('{');
+    const firstBracket = cleanText.indexOf('[');
+    
+    let start = -1;
+    
+    // Determina onde começa (o que aparecer primeiro, ignorando -1)
+    if (firstBrace !== -1 && firstBracket !== -1) {
+        start = Math.min(firstBrace, firstBracket);
+    } else if (firstBrace !== -1) {
+        start = firstBrace;
+    } else {
+        start = firstBracket;
+    }
+
+    const lastBrace = cleanText.lastIndexOf('}');
+    const lastBracket = cleanText.lastIndexOf(']');
+    
+    let end = -1;
+
+    // Determina onde termina (o que aparecer por último)
+    if (lastBrace !== -1 && lastBracket !== -1) {
+        end = Math.max(lastBrace, lastBracket);
+    } else if (lastBrace !== -1) {
+        end = lastBrace;
+    } else {
+        end = lastBracket;
+    }
+    
+    // Se encontrou limites válidos, recorta o texto
+    if (start !== -1 && end !== -1 && end > start) {
+        cleanText = cleanText.substring(start, end + 1);
+    }
+
+    try {
+        return JSON.parse(cleanText);
+    } catch (e) {
+        console.error("Falha ao fazer parse do JSON. Texto recebido:", text);
+        console.error("Texto limpo tentado:", cleanText);
+        throw new Error("A resposta da IA não é um JSON válido. Tente novamente.");
+    }
+};
+
 // Helper for rate limit handling with exponential backoff
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
   retries = 3,
-  delay = 2000,
+  delay = 3000,
   factor = 2
 ): Promise<T> {
   try {
@@ -64,7 +124,7 @@ async function retryWithBackoff<T>(
 
 /**
  * Função Wrapper Inteligente:
- * Tenta gerar com o modelo primário. Se der erro de cota (429), tenta com o fallback.
+ * Tenta gerar com o modelo primário. Se der erro de cota (429) ou erro de modelo não encontrado (404), tenta com o fallback.
  */
 async function generateSmartContent(
   model: string, 
@@ -84,19 +144,22 @@ async function generateSmartContent(
 
   try {
     // Tentativa 1: Modelo Primário
-    return await retryWithBackoff(() => runRequest(model, config), 2, 1000);
+    return await retryWithBackoff(() => runRequest(model, config), 2, 2000);
   } catch (error: any) {
-    // Verifica erros de cota ou sobrecarga
-    const isQuotaOrLoadError = 
+    // Verifica erros de cota (429) ou modelo não encontrado (404)
+    const isRecoverableError = 
       error?.status === 429 || 
       error?.code === 429 || 
+      error?.status === 404 || // Model not found
+      error?.code === 404 ||   // Model not found
       (error?.message && error.message.includes('429')) ||
       (error?.message && error.message.includes('quota')) ||
       (error?.message && error.message.includes('RESOURCE_EXHAUSTED')) ||
+      (error?.message && error.message.includes('NOT_FOUND')) || // Catch message text for 404
       error?.status === 503;
 
-    if (isQuotaOrLoadError && model !== fallbackModel) {
-      console.warn(`Modelo ${model} falhou por cota. Tentando fallback para ${fallbackModel}...`);
+    if (isRecoverableError && model !== fallbackModel) {
+      console.warn(`Modelo ${model} falhou (Erro ${error.status || error.code || 'Desconhecido'}). Tentando fallback para ${fallbackModel}...`);
       
       // Limpeza de Config: Thinking Config pode não ser suportado em modelos mais antigos/estáveis
       const cleanConfig = { ...config };
@@ -104,8 +167,8 @@ async function generateSmartContent(
           delete cleanConfig.thinkingConfig;
       }
 
-      // Tentativa 2: Modelo Fallback
-      return await retryWithBackoff(() => runRequest(fallbackModel, cleanConfig), 2, 2000);
+      // Tentativa 2: Modelo Fallback com delay maior
+      return await retryWithBackoff(() => runRequest(fallbackModel, cleanConfig), 2, 4000);
     }
     throw error;
   }
@@ -113,41 +176,35 @@ async function generateSmartContent(
 
 export const analyzeSerp = async (keyword: string, language: string = 'Português'): Promise<SerpAnalysisResult> => {
   try {
+    // FIX: responseMimeType: 'application/json' cannot be used with tools
     const result = await generateSmartContent(
         MODEL_PRIMARY_TEXT,
         `
         ${ARTIGO_GENIO_PERSONA}
         TAREFA: Realizar análise SERP Profunda para a palavra-chave: "${keyword}".
         Idioma: ${language}.
-        Retorne um JSON com:
-        1. Títulos dos 3 principais concorrentes.
-        2. Lacunas de conteúdo.
-        3. Perguntas PAA.
-        4. Keywords LSI.
-        5. Estratégia curta.
+        
+        Você DEVE retornar um JSON válido com a seguinte estrutura:
+        {
+          "competitorTitles": ["Titulo 1", "Titulo 2", "Titulo 3"],
+          "contentGaps": ["Lacuna 1", "Lacuna 2"],
+          "questions": ["Pergunta 1", "Pergunta 2"],
+          "lsiKeywords": ["Keyword 1", "Keyword 2"],
+          "strategy": "Sua estratégia aqui"
+        }
+        
+        Retorne APENAS o JSON.
         `,
         {
-            tools: [{ googleSearch: {} }],
-            responseMimeType: "application/json",
-            responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                    competitorTitles: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    contentGaps: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    questions: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    lsiKeywords: { type: Type.ARRAY, items: { type: Type.STRING } },
-                    strategy: { type: Type.STRING }
-                }
-            }
+            tools: [{ googleSearch: {} }]
         }
     );
 
-    if (result.text) {
-      return JSON.parse(result.text) as SerpAnalysisResult;
-    }
-    throw new Error("No analysis generated");
+    return cleanAndParseJSON(result.text);
+
   } catch (error) {
     console.error("SERP Analysis failed", error);
+    // Retorna fallback seguro em vez de quebrar tudo
     return {
       competitorTitles: [],
       contentGaps: [],
@@ -195,8 +252,7 @@ export const generateArticleStructure = async (
       }
     );
 
-    if (!response.text) throw new Error("Structure generation failed");
-    return JSON.parse(response.text);
+    return cleanAndParseJSON(response.text);
   } catch (error) {
     console.error("Structure generation error", error);
     throw error;
@@ -215,24 +271,65 @@ export const generateMainContent = async (
   authorName?: string
 ): Promise<string> => {
   
-  // Internal link search (Auxiliary, can fail safely)
+  // -- BUSCA DE LINKS INTERNOS (Reforçada) --
   let internalLinksContext = "";
-  if (siteUrl) {
+  
+  if (siteUrl && siteUrl.trim() !== '') {
     try {
-        const domain = siteUrl.replace(/^https?:\/\//, '').split('/')[0];
-        const linkSearch = await generateSmartContent(
+        // Limpeza básica do domínio para usar no operador site:
+        let domain = siteUrl.trim();
+        // Remove protocolo
+        domain = domain.replace(/^https?:\/\//, '');
+        // Remove barra final
+        if (domain.endsWith('/')) domain = domain.slice(0, -1);
+        // Se houver caminhos (ex: site.com.br/blog), pega a raiz ou usa como está
+        // Geralmente 'site:site.com' é mais seguro
+        
+        console.log(`Buscando links internos em: ${domain} para o tópico: ${keyword}`);
+
+        // Chamada específica para buscar links usando ferramentas
+        const linkSearchResponse = await generateSmartContent(
             MODEL_PRIMARY_TEXT,
-            `Search site:${domain} for 3 articles related to "${keyword}". Return JSON list with 'title' and 'url'.`,
+            `
+            Role: SEO Specialist.
+            Task: Search specifically for 3 relevant articles on the website "${domain}" related to the keyword "${keyword}".
+            Query to use: "site:${domain} ${keyword}"
+            
+            Return ONLY a JSON array of objects with keys: 'title' and 'url'.
+            Example: [{"title": "Artigo 1", "url": "https://${domain}/artigo-1"}]
+            Ensure URLs belong to ${domain}.
+            `,
             { 
-                tools: [{ googleSearch: {} }],
-                responseMimeType: "application/json"
-            }
+                tools: [{ googleSearch: {} }]
+            },
+            MODEL_FALLBACK_TEXT // Se o primary falhar, o fallback tenta buscar (pode ter menos precisão sem tools no fallback antigo, mas ok)
         );
-        const links = linkSearch.text ? JSON.parse(linkSearch.text) : [];
-        if (Array.isArray(links) && links.length > 0) {
-            internalLinksContext = `LINKS INTERNOS: ${JSON.stringify(links)}`;
+
+        const foundLinks = cleanAndParseJSON(linkSearchResponse.text);
+
+        if (Array.isArray(foundLinks) && foundLinks.length > 0) {
+            // Validação extra: garantir que o link realmente pertence ao domínio (evitar alucinação)
+            const validLinks = foundLinks.filter(l => l.url && l.url.includes(domain)).slice(0, 3);
+
+            if (validLinks.length > 0) {
+                internalLinksContext = `
+                ---------------------------------------------------------
+                !!! INSTRUÇÃO OBRIGATÓRIA DE LINKAGEM INTERNA (SEO) !!!
+                
+                Você DEVE incluir os seguintes 3 links internos no corpo do artigo.
+                Não crie uma lista no final. Integre-os NATURALMENTE ao texto usando âncoras (anchor text) relevantes.
+                
+                LINKS A INSERIR:
+                ${JSON.stringify(validLinks, null, 2)}
+                ---------------------------------------------------------
+                `;
+                console.log("Links internos encontrados e injetados:", validLinks);
+            }
         }
-    } catch (e) { console.warn("Link search skipped", e); }
+    } catch (e) { 
+        console.warn("Internal link search failed or timed out", e); 
+        // Não bloqueia a geração do artigo, apenas segue sem links
+    }
   }
 
   const prompt = `
@@ -253,6 +350,7 @@ export const generateMainContent = async (
     Perguntas PAA: ${serpData.questions.join(', ')}
 
     Opções: TOC=${options.includeToc}, Glossario=${options.includeGlossary}.
+    
     ${internalLinksContext}
 
     Retorne APENAS HTML puro dentro de <div class="artigogenio-content"><article>... </article></div>.
@@ -264,8 +362,8 @@ export const generateMainContent = async (
         MODEL_PRIMARY_TEXT,
         prompt,
         { 
-            // Thinking budget ajuda na estruturação complexa
-            thinkingConfig: { thinkingBudget: 4096 }, 
+            // Thinking budget reduzido para economizar cotas
+            thinkingConfig: { thinkingBudget: 1024 }, 
             maxOutputTokens: 8192, 
         } 
       );
@@ -325,9 +423,11 @@ export const generateMetadata = async (
             }
         );
 
-        if (response.text) return JSON.parse(response.text);
+        return cleanAndParseJSON(response.text);
+
     } catch (e) { console.error("Metadata gen failed", e); }
     
+    // Fallback safe
     return {
         seoTitle: `${keyword}: Guia Completo`.substring(0, 60),
         metaDescription: `Saiba tudo sobre ${keyword}. Guia completo.`.substring(0, 156),
@@ -386,10 +486,12 @@ export const generateMediaStrategy = async (
         }
       );
 
-      if (response.text) return JSON.parse(response.text);
+      return cleanAndParseJSON(response.text);
+
   } catch (e) { console.error("Media gen failed", e); }
 
-  return { videoData: { query: keyword, title: "", channel: "", url: "", embedHtml: "" }, imageSpecs: [] };
+  // Fallback: Default query is TITLE now, not keyword, for better video matching
+  return { videoData: { query: title, title: "", channel: "", url: "", embedHtml: "" }, imageSpecs: [] };
 };
 
 export const generateTechnicalSeo = (
@@ -587,46 +689,38 @@ export const editGeneratedImage = async (
 
 export const findRealYoutubeVideo = async (query: string): Promise<VideoData> => {
   const prompt = `
-    Search for a high-quality, journalistic, and informative YouTube video relevant to the query: "${query}".
+    Context: You are a helpful news assistant.
+    Task: Search specifically for a YouTube video URL about: "${query}".
     
-    CRITICAL CRITERIA:
-    1. MUST be a direct 'watch' URL (youtube.com/watch?v=...). No channels/playlists.
-    2. Content MUST be safe for AdSense (no age restriction, no hate speech, no controversy).
-    3. Preference for official channels, news outlets, or educational creators.
+    INSTRUCTIONS:
+    1. Use the search tool to find a YouTube video.
+    2. The URL MUST be a standard watch URL: "https://www.youtube.com/watch?v=..."
+    3. Prefer high-quality, relevant content (news, educational, official channels).
+    4. Do NOT return channel URLs or playlist URLs.
     
-    Return a JSON object with:
-    - title
-    - channel
-    - url (valid youtube watch url)
-    - caption (Write a professional, journalistic caption in Portuguese describing why this video is relevant).
-    - altText (Accessibility description).
+    Response format (JSON only):
+    {
+      "title": "Video Title",
+      "channel": "Channel Name",
+      "url": "https://www.youtube.com/watch?v=VIDEO_ID",
+      "caption": "Brief description of the video context.",
+      "altText": "Accessibility description."
+    }
   `;
 
-  // Aqui usamos diretamente o fallback (Flash Stable) porque a busca do Google consome muita cota
-  // e o modelo Flash é suficiente e mais econômico para esta tarefa
-  const response = await generateSmartContent(
-    MODEL_FALLBACK_TEXT, 
+  // Use retry logic for robustness
+  // FIX: responseMimeType cannot be used with tools
+  const response = await retryWithBackoff(() => generateSmartContent(
+    MODEL_FALLBACK_TEXT, // Use Flash for speed and reliability
     prompt,
     {
-      tools: [{ googleSearch: {} }],
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          title: { type: Type.STRING },
-          channel: { type: Type.STRING },
-          url: { type: Type.STRING },
-          caption: { type: Type.STRING },
-          altText: { type: Type.STRING }
-        }
-      }
+      tools: [{ googleSearch: {} }]
     }
-  );
+  ));
 
-  if (!response.text) throw new Error("Video search failed");
+  const result = cleanAndParseJSON(response.text);
   
-  const result = JSON.parse(response.text);
-  if (!result.url) throw new Error("No URL found");
+  if (!result.url) throw new Error("No URL found for the video.");
 
   const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
   const match = result.url.match(regExp);
@@ -638,6 +732,8 @@ export const findRealYoutubeVideo = async (query: string): Promise<VideoData> =>
   if (videoId) {
      embedHtml = `<iframe width="100%" height="100%" src="https://www.youtube-nocookie.com/embed/${videoId}" title="${result.title}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
      thumbnailUrl = `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+  } else {
+      throw new Error("Invalid YouTube URL format.");
   }
 
   return {
@@ -647,7 +743,7 @@ export const findRealYoutubeVideo = async (query: string): Promise<VideoData> =>
     url: result.url,
     embedHtml: embedHtml,
     thumbnailUrl: thumbnailUrl,
-    caption: result.caption || `Assista ao vídeo sobre ${query}`,
-    altText: result.altText || `Vídeo do YouTube: ${result.title}`
+    caption: result.caption || `Assista ao vídeo: ${query}`,
+    altText: result.altText || `Vídeo sobre ${query}`
   };
 };

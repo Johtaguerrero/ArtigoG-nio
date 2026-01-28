@@ -386,8 +386,19 @@ ${mediaData.videoData.caption ? `<p class="text-sm text-slate-500 mt-2 italic">$
   };
 
   const handleSearchVideo = async () => {
-    const query = article.videoData?.query || article.title || article.topic;
-    if (!query) return;
+    // CORREÇÃO CRÍTICA: Priorizar o input do usuário e remover lógica complexa de sobrescrita.
+    // Se o usuário digitou algo, usamos aquilo. Ponto.
+    let query = article.videoData?.query?.trim();
+    
+    // Apenas se estiver vazio, tentamos fallbacks inteligentes
+    if (!query) {
+         query = article.title || article.topic || article.targetKeyword;
+    }
+    
+    if (!query) {
+        alert("Digite um termo de busca ou gere o artigo primeiro.");
+        return;
+    }
 
     setIsSearchingVideo(true);
     try {
@@ -407,28 +418,38 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
 </div><!-- video-end -->`;
 
         // 2. Lógica de Injeção Inteligente
+        let insertIndex = -1;
+        let insertionString = "\n" + videoSection + "\n";
         
         // Verifica se já existe um container de vídeo (pelo ID ou pela classe antiga)
-        const hasExistingVideo = newHtmlContent.includes('id="featured-video-container"') || newHtmlContent.includes('class="video-container');
-        
-        if (hasExistingVideo) {
-           // Regex para substituir o bloco de vídeo inteiro (tenta capturar até o comentário de fechamento ou fim da div)
-           // Fallback para div genérica se o comentário não existir (artigos antigos)
-           if (newHtmlContent.includes('<!-- video-end -->')) {
-               newHtmlContent = newHtmlContent.replace(/<div id="featured-video-container"[\s\S]*?<!-- video-end -->/, videoSection);
-           } else {
-               // Fallback regex (menos preciso, mas funciona para estrutura antiga)
-               newHtmlContent = newHtmlContent.replace(/<div class="video-container[\s\S]*?<\/div>\s*<\/div>/, videoSection);
-           }
+        if (newHtmlContent.includes('id="featured-video-container"')) {
+            // Replace existing
+            newHtmlContent = newHtmlContent.replace(/<div id="featured-video-container"[\s\S]*?<!-- video-end -->/, videoSection);
+        } else if (newHtmlContent.includes('class="video-container')) {
+             // Fallback regex for old structure
+             newHtmlContent = newHtmlContent.replace(/<div class="video-container[\s\S]*?<\/div>\s*<\/div>/, videoSection);
         } else {
-           // Se não existe, injeta após o primeiro parágrafo (Lead)
-           const leadEndIndex = newHtmlContent.indexOf('</p>');
-           if (leadEndIndex !== -1) {
-              newHtmlContent = newHtmlContent.slice(0, leadEndIndex + 4) + "\n" + videoSection + newHtmlContent.slice(leadEndIndex + 4);
-           } else {
-              // Se não achar parágrafo, coloca no topo do article
-              newHtmlContent = newHtmlContent.replace('<article>', `<article>\n${videoSection}`);
-           }
+             // Find best spot: After first paragraph (lead)
+             const leadEnd = newHtmlContent.indexOf('</p>');
+             if (leadEnd !== -1) {
+                 insertIndex = leadEnd + 4;
+             } else {
+                // Fallback: After H1
+                const h1End = newHtmlContent.indexOf('</h1>');
+                if (h1End !== -1) {
+                    insertIndex = h1End + 5;
+                } else {
+                    // Fallback: Top of article
+                    const articleTag = newHtmlContent.indexOf('<article>');
+                    if (articleTag !== -1) insertIndex = articleTag + 9;
+                }
+             }
+             
+             if (insertIndex !== -1) {
+                newHtmlContent = newHtmlContent.slice(0, insertIndex) + insertionString + newHtmlContent.slice(insertIndex);
+             } else {
+                 newHtmlContent = videoSection + newHtmlContent; // Last resort
+             }
         }
       }
 
@@ -444,9 +465,12 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
       // Feedback visual
       alert("Vídeo jornalístico e seguro encontrado e inserido com sucesso!");
 
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert("Erro ao buscar vídeo no YouTube. Tente refinar o termo de busca.");
+      let msg = "Erro ao buscar vídeo.";
+      if (e.message) msg += ` ${e.message}`;
+      if (e.message.includes("429")) msg = "Limite de requisições excedido. Tente novamente em alguns segundos.";
+      alert(msg);
     } finally {
       setIsSearchingVideo(false);
     }
@@ -825,7 +849,16 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
                                 <input 
                                     type="text" 
                                     value={article.videoData?.query || ''} 
-                                    onChange={(e) => setArticle({...article, videoData: {...article.videoData!, query: e.target.value}})} 
+                                    onChange={(e) => {
+                                        // SAFE UPDATE: Ensure videoData object structure exists
+                                        const currentVideoData = article.videoData || { 
+                                            query: '', title: '', channel: '', url: '', embedHtml: '' 
+                                        };
+                                        setArticle({
+                                            ...article, 
+                                            videoData: {...currentVideoData, query: e.target.value}
+                                        });
+                                    }} 
                                     className="w-full bg-white border border-slate-300 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-red-500 outline-none"
                                     placeholder="Buscar vídeo no YouTube..."
                                 />
