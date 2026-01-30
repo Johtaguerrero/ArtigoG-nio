@@ -128,12 +128,22 @@ async function generateSmartContent(
 export const findRealYoutubeVideo = async (query: string): Promise<VideoData> => {
   const prompt = `
     Context: You are a helpful news assistant.
-    Task: Search specifically for a YouTube video URL about: "${query}".
+    Task: Search specifically for a relevant YouTube video URL about: "${query}".
+    
     INSTRUCTIONS:
-    1. Use the search tool to find a YouTube video.
-    2. The URL MUST be a standard watch URL.
-    3. Prefer high-quality, relevant content.
-    Response format (JSON only): { "title": "Video Title", "channel": "Channel Name", "url": "https://www.youtube.com/watch?v=VIDEO_ID", "caption": "Brief description.", "altText": "Accessibility." }
+    1. Use the search tool to find a YouTube video (watch URL).
+    2. Prefer high-quality content (news, official channels, educational).
+    3. MANDATORY: Generate a "caption" in Portuguese (journalistic style) describing why this video is relevant.
+    4. MANDATORY: Generate an "altText" in Portuguese (descriptive) for accessibility.
+    
+    Response format (JSON only): 
+    { 
+      "title": "Video Title", 
+      "channel": "Channel Name", 
+      "url": "https://www.youtube.com/watch?v=VIDEO_ID", 
+      "caption": "Legenda jornalística em português.", 
+      "altText": "Descrição acessível do vídeo em português." 
+    }
   `;
 
   const response = await retryWithBackoff(() => generateSmartContent(MODEL_FALLBACK_TEXT, prompt, { tools: [{ googleSearch: {} }] }));
@@ -141,24 +151,62 @@ export const findRealYoutubeVideo = async (query: string): Promise<VideoData> =>
   
   if (!result.url) throw new Error("No URL found for the video.");
 
-  const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
+  // Regex atualizado para suportar youtube.com/shorts/, youtu.be, e youtube.com/watch
+  const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/;
   const match = result.url.match(regExp);
   const videoId = match ? match[1] : null;
 
   if (videoId) {
+     const embedTitle = result.altText || result.title;
      return {
         query: query,
         title: result.title || "Video",
         channel: result.channel || "YouTube",
         url: result.url,
-        embedHtml: `<iframe width="100%" height="100%" src="https://www.youtube-nocookie.com/embed/${videoId}" title="${result.title}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`,
+        // Usamos altText no atributo title do iframe para acessibilidade
+        embedHtml: `<iframe width="100%" height="100%" src="https://www.youtube-nocookie.com/embed/${videoId}" title="${embedTitle}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`,
         thumbnailUrl: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
-        caption: result.caption || `Assista ao vídeo: ${query}`,
-        altText: result.altText || `Vídeo sobre ${query}`
+        caption: result.caption || `Assista ao vídeo sobre: ${query}`,
+        altText: result.altText || `Vídeo explicativo sobre ${query}`
      };
   } else {
       throw new Error("Invalid YouTube URL format.");
   }
+};
+
+export const injectVideoIntoHtml = (html: string, videoData: VideoData): string => {
+    if (!videoData.embedHtml) return html;
+
+    const videoSection = `
+<div id="featured-video-container" class="video-container my-8">
+  <h3 class="text-lg font-bold mb-2 flex items-center gap-2">
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-red-600"><rect width="20" height="15" x="2" y="7" rx="2" ry="2"/><polyline points="17 12 12 7 12 17"/></svg>
+    Assista: ${videoData.title}
+  </h3>
+  <div class="aspect-video bg-slate-100 rounded-xl overflow-hidden shadow-sm">
+    ${videoData.embedHtml}
+  </div>
+  ${videoData.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoData.caption}</p>` : ''}
+</div><!-- video-end -->`;
+
+    // Remove existing if present to avoid dupes during re-runs or manual adds
+    let cleanHtml = html.replace(/<div id="featured-video-container"[\s\S]*?<!-- video-end -->/g, '');
+
+    // Logic to insert: 
+    // 1. After first paragraph (lead)
+    const leadCloseIndex = cleanHtml.indexOf('</p>');
+    if (leadCloseIndex !== -1) {
+        return cleanHtml.slice(0, leadCloseIndex + 4) + "\n" + videoSection + cleanHtml.slice(leadCloseIndex + 4);
+    }
+    
+    // 2. Fallback: After H1
+    const h1CloseIndex = cleanHtml.indexOf('</h1>');
+    if (h1CloseIndex !== -1) {
+        return cleanHtml.slice(0, h1CloseIndex + 5) + "\n" + videoSection + cleanHtml.slice(h1CloseIndex + 5);
+    }
+
+    // 3. Fallback: Top of article content
+    return videoSection + "\n" + cleanHtml;
 };
 
 export const analyzeSerp = async (keyword: string, language: string = 'Português'): Promise<SerpAnalysisResult> => {
@@ -264,20 +312,31 @@ export const generateMainContent = async (
     Escreva um Artigo SEO sobre "${topic}" (Keyword: "${keyword}"). Idioma: ${language}.
     H1 EXATO: "${structure.title}". Lead: "${structure.lead}".
     
-    INSTRUÇÃO E-E-A-T (MUITO IMPORTANTE):
-    Ao final do artigo (antes da conclusão), crie uma seção EXATAMENTE com este formato:
+    INSTRUÇÃO E-E-A-T (MUITO IMPORTANTE - REFERÊNCIAS EXTERNAS):
+    Ao final do artigo (antes da conclusão), crie uma seção OBRIGATÓRIA contendo 3 links para sites de ALTA AUTORIDADE EXTERNOS (Ex: Grandes Portais de Notícias, Wikipedia, Sites Governamentais, Universidades).
+    NÃO coloque links para o site "${siteUrl || 'do usuário'}" nesta lista. Devem ser fontes EXTERNAS para dar credibilidade e validação.
     
+    Use este formato HTML exato para as referências:
     <h3>🎓 Referências de Autoridade (Acesso Direto)</h3>
     <ol>
-       <li>[Fonte 1]: <a href="#">Link</a></li>
-       <li>[Fonte 2]: <a href="#">Link</a></li>
+       <li><strong>Nome da Fonte Externa</strong>: <a href="URL_REAL_EXTERNA" target="_blank" rel="noopener nofollow">Título ou descrição do artigo citado</a></li>
+       <li><strong>Nome da Fonte Externa</strong>: <a href="URL_REAL_EXTERNA" target="_blank" rel="noopener nofollow">Título ou descrição do artigo citado</a></li>
+       <li><strong>Nome da Fonte Externa</strong>: <a href="URL_REAL_EXTERNA" target="_blank" rel="noopener nofollow">Título ou descrição do artigo citado</a></li>
     </ol>
     
     Retorne APENAS HTML dentro de <div class="artigogenio-content"><article>... </article></div>.
   `;
 
   try {
-      const response = await generateSmartContent(MODEL_PRIMARY_TEXT, prompt, { thinkingConfig: { thinkingBudget: 1024 }, maxOutputTokens: 8192 });
+      const response = await generateSmartContent(
+          MODEL_PRIMARY_TEXT, 
+          prompt, 
+          { 
+              thinkingConfig: { thinkingBudget: 1024 }, 
+              maxOutputTokens: 8192,
+              tools: [{ googleSearch: {} }] // Permite busca para encontrar URLs externas reais
+          }
+      );
       let html = response.text || "";
       const markdownMatch = html.match(/```html([\s\S]*?)```/i) || html.match(/```([\s\S]*?)```/);
       if (markdownMatch) html = markdownMatch[1];
@@ -331,11 +390,22 @@ export const generateMediaStrategy = async (title: string, keyword: string, lang
         { responseMimeType: "application/json", responseSchema: { type: Type.OBJECT, properties: { videoSearchQuery: { type: Type.STRING }, imageSpecs: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { role: { type: Type.STRING }, aspectRatio: { type: Type.STRING }, prompt: { type: Type.STRING }, alt: { type: Type.STRING }, title: { type: Type.STRING }, caption: { type: Type.STRING }, filename: { type: Type.STRING }, url: { type: Type.STRING } } } } } } }
       );
       const strategy = cleanAndParseJSON(response.text);
+      
+      // AUTO-BUSCA DO VÍDEO
       let realVideoData: VideoData;
-      try { realVideoData = await findRealYoutubeVideo(strategy.videoSearchQuery || title); } 
-      catch { realVideoData = { query: title, title: "", channel: "", url: "", embedHtml: "" }; }
+      try { 
+          // Tenta encontrar o vídeo automaticamente, incluindo legenda e alt text
+          realVideoData = await findRealYoutubeVideo(strategy.videoSearchQuery || title); 
+      } catch (videoError) {
+          console.warn("Falha ao buscar vídeo automaticamente", videoError);
+          // Fallback vazio mas mantendo a query para busca manual
+          realVideoData = { query: strategy.videoSearchQuery || title, title: "", channel: "", url: "", embedHtml: "" }; 
+      }
+
       return { videoData: realVideoData, imageSpecs: strategy.imageSpecs || [] };
-  } catch { return { videoData: { query: title, title: "", channel: "", url: "", embedHtml: "" }, imageSpecs: [] }; }
+  } catch { 
+      return { videoData: { query: title, title: "", channel: "", url: "", embedHtml: "" }, imageSpecs: [] }; 
+  }
 };
 
 export const generateTechnicalSeo = (article: ArticleData, author?: Author): { schemaJsonLd: string, wordpressPostJson: string } => {

@@ -172,27 +172,8 @@ export const ArticleWizard: React.FC = () => {
       setProgress({ step: 'Gerando metadados e schema JSON-LD...', percentage: 90 });
       const seoData = await geminiService.generateMetadata(article.topic, article.targetKeyword, htmlBody, article.language);
 
-      // Combine HTML (Video Injection)
-      let fullHtml = htmlBody;
-      
-      if (mediaData.videoData.embedHtml) {
-        // Marcador único para facilitar substituição futura
-        const videoSection = `<div id="featured-video-container" class="video-container my-8">
-<h3 class="text-lg font-bold mb-2 flex items-center gap-2">Assista: ${mediaData.videoData.title}</h3>
-<div class="aspect-video bg-slate-100 rounded-xl overflow-hidden shadow-sm">
-${mediaData.videoData.embedHtml}
-</div>
-${mediaData.videoData.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${mediaData.videoData.caption}</p>` : ''}
-</div><!-- video-end -->`;
-        
-        const leadCloseIndex = fullHtml.indexOf('</p>');
-        if (leadCloseIndex !== -1) {
-            const insertPosition = leadCloseIndex + 4;
-            fullHtml = fullHtml.slice(0, insertPosition) + "\n" + videoSection + fullHtml.slice(insertPosition);
-        } else {
-            fullHtml = fullHtml.replace('<article>', `<article>\n${videoSection}`);
-        }
-      }
+      // Combine HTML (Video Injection) using centralized helper
+      let fullHtml = geminiService.injectVideoIntoHtml(htmlBody, mediaData.videoData);
 
       fullHtml = fullHtml.trim();
 
@@ -405,53 +386,8 @@ ${mediaData.videoData.caption ? `<p class="text-sm text-slate-500 mt-2 italic">$
       // 1. Encontrar o vídeo usando o serviço (agora mais robusto)
       const videoResult = await geminiService.findRealYoutubeVideo(query);
       
-      let newHtmlContent = article.htmlContent || '';
-      
-      if (newHtmlContent && videoResult.embedHtml) {
-        // Criamos o bloco HTML do vídeo com um ID específico para facilitar substituição
-        const videoSection = `<div id="featured-video-container" class="video-container my-8">
-<h3 class="text-lg font-bold mb-2 flex items-center gap-2">Assista: ${videoResult.title}</h3>
-<div class="aspect-video bg-slate-100 rounded-xl overflow-hidden shadow-sm">
-${videoResult.embedHtml}
-</div>
-${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoResult.caption}</p>` : ''}
-</div><!-- video-end -->`;
-
-        // 2. Lógica de Injeção Inteligente
-        let insertIndex = -1;
-        let insertionString = "\n" + videoSection + "\n";
-        
-        // Verifica se já existe um container de vídeo (pelo ID ou pela classe antiga)
-        if (newHtmlContent.includes('id="featured-video-container"')) {
-            // Replace existing
-            newHtmlContent = newHtmlContent.replace(/<div id="featured-video-container"[\s\S]*?<!-- video-end -->/, videoSection);
-        } else if (newHtmlContent.includes('class="video-container')) {
-             // Fallback regex for old structure
-             newHtmlContent = newHtmlContent.replace(/<div class="video-container[\s\S]*?<\/div>\s*<\/div>/, videoSection);
-        } else {
-             // Find best spot: After first paragraph (lead)
-             const leadEnd = newHtmlContent.indexOf('</p>');
-             if (leadEnd !== -1) {
-                 insertIndex = leadEnd + 4;
-             } else {
-                // Fallback: After H1
-                const h1End = newHtmlContent.indexOf('</h1>');
-                if (h1End !== -1) {
-                    insertIndex = h1End + 5;
-                } else {
-                    // Fallback: Top of article
-                    const articleTag = newHtmlContent.indexOf('<article>');
-                    if (articleTag !== -1) insertIndex = articleTag + 9;
-                }
-             }
-             
-             if (insertIndex !== -1) {
-                newHtmlContent = newHtmlContent.slice(0, insertIndex) + insertionString + newHtmlContent.slice(insertIndex);
-             } else {
-                 newHtmlContent = videoSection + newHtmlContent; // Last resort
-             }
-        }
-      }
+      // 2. Usar o helper centralizado para injetar o vídeo
+      const newHtmlContent = geminiService.injectVideoIntoHtml(article.htmlContent || '', videoResult);
 
       const updatedArticle = {
         ...article,
