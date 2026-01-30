@@ -6,41 +6,42 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="ArtigoGênio - Plataforma de IA Editorial Premium para SEO 2025 e E-E-A-T." />
     <title>ArtigoGênio - IA Editorial Premium</title>
-    <!-- Tailwind CDN (Para produção ideal, recomenda-se postcss, mas CDN funciona para deploy rápido) -->
+    <!-- Tailwind CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Google Identity Services -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <style>
       @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-      body {
-        font-family: 'Inter', sans-serif;
-        background-color: #f8fafc;
-      }
-      /* Custom scrollbar */
-      ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
-      }
-      ::-webkit-scrollbar-track {
-        background: #f1f5f9;
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #cbd5e1;
-        border-radius: 4px;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #94a3b8;
-      }
-      /* Prose Overrides for Preview */
+      body { font-family: 'Inter', sans-serif; background-color: #f8fafc; }
+      ::-webkit-scrollbar { width: 8px; height: 8px; }
+      ::-webkit-scrollbar-track { background: #f1f5f9; }
+      ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+      ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+      
+      /* Prose Overrides */
       .prose h2 { font-size: 1.5em; font-weight: 700; margin-top: 1.5em; margin-bottom: 0.5em; color: #1e293b; }
-      .prose h3 { font-size: 1.25em; font-weight: 600; margin-top: 1.25em; margin-bottom: 0.5em; color: #334155; }
+      .prose h3 { font-size: 1.25em; font-weight: 600; margin-top: 1.5em; margin-bottom: 0.5em; color: #334155; }
       .prose p { margin-bottom: 1em; line-height: 1.75; color: #475569; }
       .prose ul, .prose ol { margin-bottom: 1em; padding-left: 1.5em; }
       .prose li { margin-bottom: 0.5em; }
       .prose strong { color: #0f172a; font-weight: 600; }
       .prose blockquote { border-left: 4px solid #3b82f6; padding-left: 1em; font-style: italic; color: #64748b; margin: 1.5em 0; }
       
-      /* Animation Utilities */
+      /* Special styling for E-E-A-T sections if prose overrides match */
+      .internal-links-section h3, h3.references-title {
+         display: flex;
+         align-items: center;
+         gap: 0.5rem;
+         margin-top: 2rem !important;
+      }
+      .internal-links-section ul li a, .references-list li a {
+         text-decoration: none;
+         color: #2563eb;
+         font-weight: 500;
+      }
+      .internal-links-section ul li a:hover, .references-list li a:hover {
+         text-decoration: underline;
+      }
+
       .animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
       @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     </style>

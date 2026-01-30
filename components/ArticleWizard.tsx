@@ -674,6 +674,11 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
     if (!article.htmlContent) return null;
     const currentAuthor = authors.find(a => a.id === article.authorId);
 
+    // Helper: Determine if video is already visible in HTML content
+    const isVideoEmbedded = article.htmlContent?.includes('featured-video-container') || 
+                        (article.videoData?.embedHtml && article.htmlContent?.includes(article.videoData.embedHtml));
+    const showFloatingVideo = article.videoData?.embedHtml && !isVideoEmbedded;
+
     return (
       <div className="max-w-6xl mx-auto animate-fade-in relative">
         {/* EDIT IMAGE MODAL */}
@@ -765,6 +770,16 @@ ${videoResult.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoRe
                     <div><p className="text-sm font-bold text-slate-900">{currentAuthor.name}</p><p className="text-xs text-slate-500">Publicado em {new Date().toLocaleDateString()}</p></div>
                   </div>
                 )}
+                
+                {/* Fallback Video Display: Shows ONLY if video exists but isn't detected in HTML */}
+                {showFloatingVideo && (
+                    <div className="my-8 mb-10 bg-slate-50 p-1 rounded-xl border border-slate-200">
+                        <h3 className="text-lg font-bold mb-2 flex items-center gap-2 px-2 pt-2 text-slate-800">Assista: {article.videoData!.title}</h3>
+                        <div className="aspect-video bg-black rounded-lg overflow-hidden shadow-sm" dangerouslySetInnerHTML={{ __html: article.videoData!.embedHtml }} />
+                        {article.videoData!.caption && <p className="text-sm text-slate-500 mt-2 italic px-2 pb-1">{article.videoData!.caption}</p>}
+                    </div>
+                )}
+
                 <div className="prose prose-slate max-w-none" dangerouslySetInnerHTML={{ __html: article.htmlContent }} />
               </div>
             )}
