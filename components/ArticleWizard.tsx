@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Wand2, Save, FileText, BarChart2, User, Globe, 
-  CheckCircle, AlertCircle, RefreshCw, Copy, Download, Eye, Plus, Image as ImageIcon, Video, MonitorPlay, Search, Loader2, Trash2, Upload, Languages, Settings2, Edit, Lightbulb, TrendingUp, Target, List, Code2, Database
+  CheckCircle, AlertCircle, RefreshCw, Copy, Download, Eye, Plus, Image as ImageIcon, Video, MonitorPlay, Search, Loader2, Trash2, Upload, Languages, Settings2, Edit, Lightbulb, TrendingUp, Target, List, Code2, Database, ChevronDown, FileImage, Type, Maximize2, Sparkles
 } from 'lucide-react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { ArticleData, Author, GenerationProgress, ImageModelType, ImageResolution } from '../types';
+import { ArticleData, Author, GenerationProgress, ImageModelType, ImageResolution, AspectRatio } from '../types';
 import * as geminiService from '../services/geminiService';
 import * as wordpressService from '../services/wordpressService';
 import { saveArticle, getAuthors, getArticle, deleteArticle, getSettings, saveSettings } from '../services/storageService';
@@ -167,6 +167,25 @@ export const ArticleWizard: React.FC = () => {
       // 4. Media Strategy (Video + Images)
       setProgress({ step: 'Planejando Mídia (Vídeo e Imagens SEO)...', percentage: 75 });
       const mediaData = await geminiService.generateMediaStrategy(structure.title, article.targetKeyword, article.language);
+
+      // AUTO HERO GENERATION - DEFAULT TO FLASH FOR SPEED
+      if (mediaData.imageSpecs.length > 0) {
+          const heroSpec = mediaData.imageSpecs[0];
+          try {
+             // Força uso do modelo configurado ou fallback para Flash
+             const modelToUse = article.imageSettings?.model || 'gemini-2.5-flash-image';
+             const resToUse = article.imageSettings?.resolution || '1K';
+             
+             setProgress({ step: 'Renderizando Hero Image...', percentage: 85 });
+             const heroBase64 = await geminiService.generateImageFromPrompt(heroSpec.prompt, heroSpec.aspectRatio, modelToUse, resToUse);
+             
+             mediaData.imageSpecs[0].url = `data:image/jpeg;base64,${heroBase64}`;
+             mediaData.imageSpecs[0].generatedWith = modelToUse;
+             mediaData.imageSpecs[0].resolution = resToUse;
+          } catch (e) {
+             console.warn("Auto-hero generation failed", e);
+          }
+      }
 
       // 5. Metadata (Updated to return SeoData)
       setProgress({ step: 'Gerando metadados e schema JSON-LD...', percentage: 90 });
@@ -742,21 +761,21 @@ export const ArticleWizard: React.FC = () => {
             )}
 
             {activeTab === 'media' && (
-              <div className="max-w-5xl mx-auto">
+              <div className="max-w-6xl mx-auto">
                 {/* Global Image Settings */}
-                <div className="mb-8 bg-indigo-50 border border-indigo-100 rounded-xl p-4 flex flex-col md:flex-row items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                        <div className="p-2 bg-indigo-100 text-indigo-700 rounded-lg"><Settings2 size={24}/></div>
+                <div className="mb-8 bg-indigo-50 border border-indigo-100 rounded-xl p-6 flex flex-col md:flex-row items-center justify-between gap-4 shadow-sm">
+                    <div className="flex items-center gap-4">
+                        <div className="p-3 bg-white text-indigo-700 rounded-xl shadow-sm border border-indigo-100"><Settings2 size={28}/></div>
                         <div>
-                            <h4 className="font-bold text-indigo-900">Configuração de Geração de Imagem</h4>
-                            <p className="text-xs text-indigo-600">Escolha entre velocidade (Flash) ou alta qualidade (Pro).</p>
+                            <h4 className="font-bold text-lg text-indigo-900">Configuração de Geração de Imagem</h4>
+                            <p className="text-sm text-indigo-600">Escolha entre velocidade (Flash) ou alta qualidade (Pro).</p>
                         </div>
                     </div>
                     <div className="flex gap-4">
                         <div>
                             <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Modelo</label>
                             <select 
-                                className="bg-white border border-indigo-200 text-indigo-900 text-sm rounded-lg px-3 py-2 outline-none"
+                                className="bg-white border border-indigo-200 text-indigo-900 text-sm rounded-lg px-4 py-2.5 outline-none shadow-sm focus:ring-2 focus:ring-indigo-200"
                                 value={article.imageSettings?.model}
                                 onChange={(e) => {
                                     setArticle({
@@ -773,7 +792,7 @@ export const ArticleWizard: React.FC = () => {
                              <div>
                                 <label className="text-[10px] font-bold text-indigo-400 uppercase block mb-1">Resolução</label>
                                 <select 
-                                    className="bg-white border border-indigo-200 text-indigo-900 text-sm rounded-lg px-3 py-2 outline-none"
+                                    className="bg-white border border-indigo-200 text-indigo-900 text-sm rounded-lg px-4 py-2.5 outline-none shadow-sm focus:ring-2 focus:ring-indigo-200"
                                     value={article.imageSettings?.resolution}
                                     onChange={(e) => {
                                         setArticle({
@@ -791,7 +810,7 @@ export const ArticleWizard: React.FC = () => {
                     </div>
                 </div>
 
-                <section className="mb-12 bg-slate-50 border border-slate-200 rounded-xl p-6">
+                <section className="mb-12 bg-white border border-slate-200 rounded-xl p-6 shadow-sm">
                    <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2"><MonitorPlay className="text-red-600" /> Vídeo Recomendado</h3>
                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                         {/* Left Column: Search & Embed Code */}
@@ -801,7 +820,6 @@ export const ArticleWizard: React.FC = () => {
                                     type="text" 
                                     value={article.videoData?.query || ''} 
                                     onChange={(e) => {
-                                        // SAFE UPDATE: Ensure videoData object structure exists
                                         const currentVideoData = article.videoData || { 
                                             query: '', title: '', channel: '', url: '', embedHtml: '' 
                                         };
@@ -835,7 +853,6 @@ export const ArticleWizard: React.FC = () => {
                                 />
                             </div>
 
-                            {/* Metadata Fields (Editable) */}
                              <div className="grid grid-cols-1 gap-4">
                                 <div>
                                     <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Legenda (Caption)</label>
@@ -882,131 +899,172 @@ export const ArticleWizard: React.FC = () => {
                    </div>
                 </section>
 
-                {/* Images Section */}
+                {/* Images Section - REFACTORED */}
                 <section>
                   <h3 className="text-xl font-bold text-slate-800 mb-6 flex items-center gap-2">
                     <ImageIcon className="text-blue-600" /> Pack de Imagens IA + SEO Completo
                   </h3>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                     {article.imageSpecs?.map((img, idx) => (
-                      <div key={idx} className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md transition">
-                         <div className="flex justify-between items-center mb-3">
+                      <div key={idx} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition group">
+                         
+                         {/* Header */}
+                         <div className="px-4 py-3 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                           <div className="flex items-center gap-3">
+                             <span className="bg-blue-100 text-blue-700 px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wide">{img.role}</span>
+                           </div>
                            <div className="flex items-center gap-2">
-                             <span className="bg-slate-100 text-slate-700 px-2 py-1 rounded text-xs font-bold uppercase">{img.role}</span>
-                             <select 
+                               <select 
                                 value={img.aspectRatio} 
                                 onChange={(e) => {
                                     const newSpecs = [...(article.imageSpecs || [])];
                                     newSpecs[idx] = { ...newSpecs[idx], aspectRatio: e.target.value as any };
                                     setArticle({ ...article, imageSpecs: newSpecs });
                                 }}
-                                className="text-xs bg-slate-50 border border-slate-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-blue-500 font-mono"
+                                className="text-xs bg-white border border-slate-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-blue-500 font-mono text-slate-600 cursor-pointer hover:border-slate-300"
                              >
-                                {['1:1', '3:4', '4:3', '9:16', '16:9'].map(ratio => (
+                                {['1:1', '3:4', '4:3', '9:16', '16:9', '21:9'].map(ratio => (
                                     <option key={ratio} value={ratio}>{ratio}</option>
                                 ))}
                              </select>
                            </div>
-                           <div className="flex gap-2">
-                              {img.url && img.url.startsWith('data:') && (
-                                <>
-                                    <button onClick={() => handleDownloadImage(img.url, img.filename)} className="text-green-600 hover:text-green-800 text-xs font-bold flex items-center gap-1 bg-green-50 px-2 py-1 rounded"><Download size={14} /></button>
-                                    <button onClick={() => handleOpenEditImage(idx)} className="text-purple-600 hover:text-purple-800 text-xs font-bold flex items-center gap-1 bg-purple-50 px-2 py-1 rounded"><Edit size={14} /> Editar</button>
-                                </>
-                              )}
-                              <button 
-                                onClick={() => handleGenerateImage(idx, img.prompt)}
-                                disabled={generatingImageIndex === idx}
-                                className="text-blue-600 hover:text-blue-800 text-xs font-bold flex items-center gap-1 bg-blue-50 px-2 py-1 rounded disabled:opacity-50"
-                              >
-                                {generatingImageIndex === idx ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />} 
-                                {img.url && img.url.startsWith('data:') ? 'Regerar' : 'Gerar'}
-                              </button>
-                           </div>
                          </div>
-                         {/* Preview */}
-                         {img.url && img.url.startsWith('data:') && (
-                           <div className="mb-3 rounded-lg overflow-hidden border border-slate-200 shadow-sm relative group">
-                             <img src={img.url} alt={img.alt} className="w-full h-auto max-h-48 object-cover" />
-                             <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-[10px] p-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                {img.generatedWith === 'gemini-3-pro-image-preview' ? '⚡ Pro Model' : '⚡ Flash Model'} • {img.resolution || '1K'}
+
+                         {/* Image Preview Area */}
+                         <div className="relative aspect-video bg-slate-100 border-b border-slate-100 flex items-center justify-center overflow-hidden">
+                            {img.url && img.url.startsWith('data:') ? (
+                                <>
+                                    <img src={img.url} alt={img.alt} className="w-full h-full object-contain" />
+                                    {/* Overlay Info */}
+                                    <div className="absolute top-3 left-3 bg-black/60 backdrop-blur-sm text-white text-[10px] px-2 py-1 rounded-md flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <Sparkles size={10} className="text-yellow-400" />
+                                        {img.generatedWith === 'gemini-3-pro-image-preview' ? 'Pro Model' : 'Flash Model'} • {img.resolution || '1K'}
+                                    </div>
+                                    {/* Action Buttons Overlay */}
+                                    <div className="absolute bottom-3 right-3 flex gap-2">
+                                         <button onClick={() => handleDownloadImage(img.url, img.filename)} className="p-2 bg-white/90 hover:bg-white text-slate-700 rounded-lg shadow-sm backdrop-blur-sm transition" title="Download">
+                                            <Download size={16} />
+                                         </button>
+                                         <button onClick={() => handleOpenEditImage(idx)} className="p-2 bg-white/90 hover:bg-white text-purple-600 rounded-lg shadow-sm backdrop-blur-sm transition" title="Editar com IA">
+                                            <Edit size={16} />
+                                         </button>
+                                    </div>
+                                </>
+                            ) : (
+                                <div className="text-center p-6">
+                                    <div className="w-16 h-16 bg-slate-200 rounded-full flex items-center justify-center mx-auto mb-3 text-slate-400">
+                                        <ImageIcon size={32} />
+                                    </div>
+                                    <p className="text-sm text-slate-500 font-medium mb-4">Nenhuma imagem gerada</p>
+                                    <button 
+                                        onClick={() => handleGenerateImage(idx, img.prompt)}
+                                        disabled={generatingImageIndex === idx}
+                                        className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-sm inline-flex items-center gap-2"
+                                    >
+                                        {generatingImageIndex === idx ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
+                                        Gerar Imagem
+                                    </button>
+                                </div>
+                            )}
+                         </div>
+
+                         {/* Content Body */}
+                         <div className="p-5 space-y-5">
+                            {/* Prompt Section */}
+                           <div>
+                             <div className="flex justify-between items-center mb-1.5">
+                                 <label className="text-[10px] font-bold text-slate-400 uppercase flex items-center gap-1"><Sparkles size={10}/> Prompt IA</label>
+                                 <button onClick={() => copyToClipboard(img.prompt)} className="text-[10px] text-blue-600 hover:underline">Copiar</button>
                              </div>
-                           </div>
-                         )}
-                         <div className="space-y-3">
-                           <div>
-                             <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Nome do Arquivo (SEO)</label>
-                             <input 
-                                type="text" 
-                                value={img.filename} 
-                                onChange={(e) => {
-                                    const newSpecs = [...(article.imageSpecs || [])];
-                                    newSpecs[idx] = { ...newSpecs[idx], filename: e.target.value };
-                                    setArticle({ ...article, imageSpecs: newSpecs });
-                                }}
-                                className="w-full bg-slate-50 border border-slate-200 rounded px-3 py-2 text-xs text-slate-600 font-mono"
-                             />
-                           </div>
-                           
-                           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                               <div>
-                                 <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Alt Text</label>
-                                 <textarea 
-                                    rows={2}
-                                    value={img.alt} 
-                                     onChange={(e) => {
-                                        const newSpecs = [...(article.imageSpecs || [])];
-                                        newSpecs[idx] = { ...newSpecs[idx], alt: e.target.value };
-                                        setArticle({ ...article, imageSpecs: newSpecs });
-                                    }}
-                                    className="w-full bg-slate-50 border border-slate-200 rounded px-3 py-2 text-xs text-slate-600 resize-none"
-                                 />
-                               </div>
-                               <div>
-                                 <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Título</label>
-                                 <textarea 
-                                    rows={2}
-                                    value={img.title} 
-                                     onChange={(e) => {
-                                        const newSpecs = [...(article.imageSpecs || [])];
-                                        newSpecs[idx] = { ...newSpecs[idx], title: e.target.value };
-                                        setArticle({ ...article, imageSpecs: newSpecs });
-                                    }}
-                                    className="w-full bg-slate-50 border border-slate-200 rounded px-3 py-2 text-xs text-slate-600 resize-none"
-                                 />
-                               </div>
-                           </div>
-
-                           <div>
-                             <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Legenda (Caption)</label>
-                             <input 
-                                type="text" 
-                                value={img.caption} 
-                                 onChange={(e) => {
-                                    const newSpecs = [...(article.imageSpecs || [])];
-                                    newSpecs[idx] = { ...newSpecs[idx], caption: e.target.value };
-                                    setArticle({ ...article, imageSpecs: newSpecs });
-                                }}
-                                className="w-full bg-slate-50 border border-slate-200 rounded px-3 py-2 text-xs text-slate-600"
-                             />
-                           </div>
-
-                           <div>
-                             <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Prompt IA</label>
-                             <div className="relative">
-                               <textarea 
+                             <textarea 
                                 value={img.prompt} 
                                  onChange={(e) => {
                                     const newSpecs = [...(article.imageSpecs || [])];
                                     newSpecs[idx] = { ...newSpecs[idx], prompt: e.target.value };
                                     setArticle({ ...article, imageSpecs: newSpecs });
                                 }}
-                                className="w-full bg-indigo-50 border border-indigo-100 rounded px-3 py-2 text-xs text-indigo-800 h-20 resize-none focus:ring-1 focus:ring-indigo-300 outline-none" 
-                               />
-                               <button onClick={() => copyToClipboard(img.prompt)} className="absolute top-2 right-2 p-1 bg-white/50 border border-indigo-100 rounded hover:bg-white text-indigo-500"><Copy size={12}/></button>
-                             </div>
+                                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-600 h-20 resize-none focus:ring-1 focus:ring-blue-500 outline-none leading-relaxed" 
+                             />
                            </div>
+
+                           {/* Regenerate Button (if image exists) */}
+                           {img.url && img.url.startsWith('data:') && (
+                                <button 
+                                    onClick={() => handleGenerateImage(idx, img.prompt)}
+                                    disabled={generatingImageIndex === idx}
+                                    className="w-full py-2 border border-blue-100 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg text-xs font-bold transition flex items-center justify-center gap-2"
+                                >
+                                    {generatingImageIndex === idx ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />} 
+                                    Regerar Imagem
+                                </button>
+                           )}
+
+                           {/* Collapsible SEO Details */}
+                           <details className="group/details">
+                                <summary className="flex items-center justify-between cursor-pointer list-none py-2 px-3 bg-slate-50 rounded-lg hover:bg-slate-100 transition border border-transparent hover:border-slate-200">
+                                    <span className="text-xs font-bold text-slate-600 flex items-center gap-2">
+                                        <Target size={14} className="text-slate-400"/> Detalhes SEO
+                                    </span>
+                                    <ChevronDown size={14} className="text-slate-400 group-open/details:rotate-180 transition-transform" />
+                                </summary>
+                                <div className="pt-4 space-y-4">
+                                     <div>
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1 flex items-center gap-1"><FileImage size={10}/> Nome do Arquivo</label>
+                                        <input 
+                                            type="text" 
+                                            value={img.filename} 
+                                            onChange={(e) => {
+                                                const newSpecs = [...(article.imageSpecs || [])];
+                                                newSpecs[idx] = { ...newSpecs[idx], filename: e.target.value };
+                                                setArticle({ ...article, imageSpecs: newSpecs });
+                                            }}
+                                            className="w-full bg-white border border-slate-200 rounded px-3 py-2 text-xs text-slate-700 font-mono focus:ring-1 focus:ring-blue-500 outline-none"
+                                        />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Alt Text</label>
+                                            <input 
+                                                type="text"
+                                                value={img.alt} 
+                                                onChange={(e) => {
+                                                    const newSpecs = [...(article.imageSpecs || [])];
+                                                    newSpecs[idx] = { ...newSpecs[idx], alt: e.target.value };
+                                                    setArticle({ ...article, imageSpecs: newSpecs });
+                                                }}
+                                                className="w-full bg-white border border-slate-200 rounded px-3 py-2 text-xs text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Título</label>
+                                            <input 
+                                                type="text"
+                                                value={img.title} 
+                                                onChange={(e) => {
+                                                    const newSpecs = [...(article.imageSpecs || [])];
+                                                    newSpecs[idx] = { ...newSpecs[idx], title: e.target.value };
+                                                    setArticle({ ...article, imageSpecs: newSpecs });
+                                                }}
+                                                className="w-full bg-white border border-slate-200 rounded px-3 py-2 text-xs text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none"
+                                            />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1 flex items-center gap-1"><Type size={10}/> Legenda</label>
+                                        <input 
+                                            type="text"
+                                            value={img.caption} 
+                                            onChange={(e) => {
+                                                const newSpecs = [...(article.imageSpecs || [])];
+                                                newSpecs[idx] = { ...newSpecs[idx], caption: e.target.value };
+                                                setArticle({ ...article, imageSpecs: newSpecs });
+                                            }}
+                                            className="w-full bg-white border border-slate-200 rounded px-3 py-2 text-xs text-slate-700 focus:ring-1 focus:ring-blue-500 outline-none"
+                                        />
+                                    </div>
+                                </div>
+                           </details>
                          </div>
                       </div>
                     ))}

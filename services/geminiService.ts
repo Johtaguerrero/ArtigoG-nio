@@ -17,6 +17,7 @@ const getClient = () => {
 // Configuração de Modelos
 const MODEL_PRIMARY_TEXT = 'gemini-3-flash-preview'; 
 const MODEL_FALLBACK_TEXT = 'gemini-flash-latest'; 
+const MODEL_TOOL_USE = 'gemini-3-flash-preview'; // Updated to 3.0 Flash for better tool stability
 const MODEL_IMAGE_FLASH = 'gemini-2.5-flash-image';
 const MODEL_IMAGE_PRO = 'gemini-3-pro-image-preview';
 
@@ -44,11 +45,13 @@ const cleanAndParseJSON = (text: string | undefined): any => {
     }
 
     let cleanText = text.trim();
+    // Tenta encontrar bloco JSON Markdown
     const markdownMatch = cleanText.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
     if (markdownMatch) {
         cleanText = markdownMatch[1].trim();
     }
     
+    // Fallback: Tenta encontrar o primeiro { ou [ e o último } ou ]
     const firstBrace = cleanText.indexOf('{');
     const firstBracket = cleanText.indexOf('[');
     let start = -1;
@@ -133,8 +136,7 @@ export const findRealYoutubeVideo = async (query: string): Promise<VideoData> =>
     INSTRUCTIONS:
     1. Use the search tool to find a YouTube video (watch URL).
     2. Prefer high-quality content (news, official channels, educational).
-    3. MANDATORY: Generate a "caption" in Portuguese (journalistic style) describing why this video is relevant.
-    4. MANDATORY: Generate an "altText" in Portuguese (descriptive) for accessibility.
+    3. MANDATORY: Return a JSON object.
     
     Response format (JSON only): 
     { 
@@ -146,36 +148,61 @@ export const findRealYoutubeVideo = async (query: string): Promise<VideoData> =>
     }
   `;
 
-  const response = await retryWithBackoff(() => generateSmartContent(MODEL_FALLBACK_TEXT, prompt, { tools: [{ googleSearch: {} }] }));
-  const result = cleanAndParseJSON(response.text);
-  
-  if (!result.url) throw new Error("No URL found for the video.");
+  try {
+      // Use gemini-3-flash-preview for tools as per guidelines
+      const response = await retryWithBackoff(() => generateSmartContent(MODEL_TOOL_USE, prompt, { tools: [{ googleSearch: {} }] }));
+      
+      let result: any;
+      try {
+          result = cleanAndParseJSON(response.text);
+      } catch (e) {
+          console.warn("JSON Parse failed, attempting fallback regex extract", e);
+          // Fallback: extract URL from text if JSON fails. Try to capture any youtube link.
+          const urlMatch = response.text?.match(/https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]{11})/);
+          if (urlMatch) {
+              result = {
+                  title: query,
+                  channel: "YouTube",
+                  url: urlMatch[0],
+                  caption: `Vídeo sobre ${query}`,
+                  altText: `Vídeo sobre ${query}`
+              };
+          } else {
+             throw new Error("Could not parse JSON or find URL in text.");
+          }
+      }
+      
+      if (!result.url || result.url.includes("VIDEO_ID")) throw new Error("No valid URL found for the video.");
 
-  // Regex atualizado para suportar youtube.com/shorts/, youtu.be, e youtube.com/watch
-  const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/;
-  const match = result.url.match(regExp);
-  const videoId = match ? match[1] : null;
+      // Regex atualizado para suportar youtube.com/shorts/, youtu.be, e youtube.com/watch
+      // [\w-] captures alphanumeric plus underscore and hyphen, which covers YouTube IDs.
+      const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([\w-]{11})/;
+      const match = result.url.match(regExp);
+      const videoId = match ? match[1] : null;
 
-  if (videoId) {
-     const embedTitle = result.altText || result.title;
-     return {
-        query: query,
-        title: result.title || "Video",
-        channel: result.channel || "YouTube",
-        url: result.url,
-        // Usamos altText no atributo title do iframe para acessibilidade
-        embedHtml: `<iframe width="100%" height="100%" src="https://www.youtube-nocookie.com/embed/${videoId}" title="${embedTitle}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`,
-        thumbnailUrl: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
-        caption: result.caption || `Assista ao vídeo sobre: ${query}`,
-        altText: result.altText || `Vídeo explicativo sobre ${query}`
-     };
-  } else {
-      throw new Error("Invalid YouTube URL format.");
+      if (videoId) {
+         const embedTitle = result.altText || result.title;
+         return {
+            query: query,
+            title: result.title || "Video",
+            channel: result.channel || "YouTube",
+            url: result.url,
+            embedHtml: `<iframe width="100%" height="100%" src="https://www.youtube-nocookie.com/embed/${videoId}" title="${embedTitle}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`,
+            thumbnailUrl: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
+            caption: result.caption || `Assista ao vídeo sobre: ${query}`,
+            altText: result.altText || `Vídeo explicativo sobre ${query}`
+         };
+      } else {
+          throw new Error("Invalid YouTube URL format.");
+      }
+  } catch (error) {
+      console.error("Failed to find video:", error);
+      throw error;
   }
 };
 
-export const injectVideoIntoHtml = (html: string, videoData: VideoData): string => {
-    if (!videoData.embedHtml) return html;
+export const injectVideoIntoHtml = (html: string, videoData?: VideoData): string => {
+    if (!videoData || !videoData.embedHtml) return html;
 
     const videoSection = `
 <div id="featured-video-container" class="video-container my-8">
@@ -382,7 +409,7 @@ export const generateMetadata = async (topic: string, keyword: string, htmlConte
     }
 };
 
-export const generateMediaStrategy = async (title: string, keyword: string, language: string): Promise<{ videoData: VideoData, imageSpecs: ImageSpec[] }> => {
+export const generateMediaStrategy = async (title: string, keyword: string, language: string): Promise<{ videoData: VideoData | undefined, imageSpecs: ImageSpec[] }> => {
   try {
       const response = await generateSmartContent(
         MODEL_PRIMARY_TEXT,
@@ -392,7 +419,7 @@ export const generateMediaStrategy = async (title: string, keyword: string, lang
       const strategy = cleanAndParseJSON(response.text);
       
       // AUTO-BUSCA DO VÍDEO
-      let realVideoData: VideoData;
+      let realVideoData: VideoData | undefined;
       try { 
           // Tenta encontrar o vídeo automaticamente, incluindo legenda e alt text
           realVideoData = await findRealYoutubeVideo(strategy.videoSearchQuery || title); 
@@ -404,7 +431,7 @@ export const generateMediaStrategy = async (title: string, keyword: string, lang
 
       return { videoData: realVideoData, imageSpecs: strategy.imageSpecs || [] };
   } catch { 
-      return { videoData: { query: title, title: "", channel: "", url: "", embedHtml: "" }, imageSpecs: [] }; 
+      return { videoData: undefined, imageSpecs: [] }; 
   }
 };
 
@@ -439,13 +466,31 @@ export const generateImageFromPrompt = async (prompt: string, aspectRatio: Aspec
   if (model === MODEL_IMAGE_PRO) config.imageConfig.imageSize = resolution;
 
   const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({ model: model, contents: { parts: [{ text: `${prompt} . Photorealistic, 8k.` }] }, config: config }), 3, 3000);
-  if (response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) return response.candidates[0].content.parts[0].inlineData.data;
-  throw new Error("Falha ao gerar imagem.");
+  
+  // FIX: Iterate through all parts to find inlineData. The model might return text/metadata first.
+  if (response.candidates?.[0]?.content?.parts) {
+      for (const part of response.candidates[0].content.parts) {
+          if (part.inlineData && part.inlineData.data) {
+              return part.inlineData.data;
+          }
+      }
+  }
+  
+  throw new Error("A IA não retornou dados de imagem válidos (inlineData missing).");
 };
 
 export const editGeneratedImage = async (base64Image: string, editPrompt: string): Promise<string> => {
   const ai = getClient();
   const response = await retryWithBackoff<GenerateContentResponse>(() => ai.models.generateContent({ model: MODEL_IMAGE_FLASH, contents: [{ role: 'user', parts: [{ inlineData: { data: base64Image.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, ""), mimeType: 'image/jpeg' } }, { text: editPrompt }] }] }), 3, 3000);
-  if (response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) return response.candidates[0].content.parts[0].inlineData.data;
-  throw new Error("Falha ao editar imagem.");
+  
+  // FIX: Iterate through all parts to find inlineData.
+  if (response.candidates?.[0]?.content?.parts) {
+      for (const part of response.candidates[0].content.parts) {
+          if (part.inlineData && part.inlineData.data) {
+              return part.inlineData.data;
+          }
+      }
+  }
+
+  throw new Error("Falha ao editar imagem (dados inválidos retornados).");
 };
