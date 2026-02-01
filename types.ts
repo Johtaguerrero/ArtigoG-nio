@@ -15,6 +15,16 @@ export interface AdvancedOptions {
   authorCredits: boolean;
 }
 
+export interface YoutubePayload {
+  search_query: string;
+  criteria: {
+    language: string;
+    min_views: number;
+    max_duration: string;
+  };
+  embed_template: string;
+}
+
 export interface VideoData {
   query: string;
   title: string;
@@ -24,6 +34,7 @@ export interface VideoData {
   thumbnailUrl?: string; // New: Para preview e SEO
   caption?: string;      // New: Legenda jornalística
   altText?: string;      // New: Acessibilidade
+  strategyPayload?: YoutubePayload; // The raw strategy from AI
 }
 
 export type ImageModelType = 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview';

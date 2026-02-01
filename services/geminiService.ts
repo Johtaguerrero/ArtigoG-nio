@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, GenerateContentResponse } from "@google/genai";
-import { AdvancedOptions, SerpAnalysisResult, VideoData, ImageSpec, SeoData, ImageModelType, ImageResolution, AspectRatio, Author, ArticleData } from "../types";
+import { AdvancedOptions, SerpAnalysisResult, VideoData, ImageSpec, SeoData, ImageModelType, ImageResolution, AspectRatio, Author, ArticleData, YoutubePayload } from "../types";
 import { getBrowserApiKey } from "./storageService";
 
 // Helper to get client with dynamic key
@@ -23,18 +23,26 @@ const MODEL_IMAGE_PRO = 'gemini-3-pro-image-preview';
 
 // --- SYSTEM PERSONA ---
 const ARTIGO_GENIO_PERSONA = `
-Você é o **ArtigoGênio AI**, um editor-chefe sênior especializado em:
-• SEO Google 2025 & Google News (Top Stories)
-• E-E-A-T (Experience, Expertise, Authority, Trust)
-• HTML Semântico para WordPress
-• Conteúdo viral, útil e indexável
-• Tom de voz: Profissional, autoritário, mas acessível (Jornalismo de alto nível).
+Você é o **ArtigoGênio AI**, um editor técnico sênior.
 
-SEMPRE siga estas regras:
-1. Palavra-chave DEVE aparecer nos primeiros 100 caracteres e no H1.
-2. Densidade da palavra-chave entre 0.8% e 1.2%.
-3. Hierarquia rigorosa (H1 único -> H2 -> H3).
-4. Parágrafos curtos e escaneáveis.
+MODO DE OPERAÇÃO:
+1. Você é um GERADOR DE DADOS. APIs externas executam as ações.
+2. Você prepara tudo de forma perfeita para execução.
+
+REGRAS CRÍTICAS DE HTML (NÃO QUEBRAR):
+• O HTML deve ser LIMPO e SEMÂNTICO.
+• Não repetir blocos.
+• Ter apenas UM <article>.
+• Ter TOC (Sumário) apenas UMA vez.
+• Não duplicar <nav class="toc">.
+• Nunca conter JS comentado.
+• Nunca aninhe <p> dentro de <p>.
+
+SEO OBRIGATÓRIO:
+• Palavra-chave nos primeiros 50 caracteres.
+• H1 único.
+• Densidade 0.8% – 1.2%.
+• Links internos e externos obrigatórios.
 `;
 
 // --- HELPERS ---
@@ -130,8 +138,8 @@ async function generateSmartContent(
 
 export const findRealYoutubeVideo = async (query: string): Promise<VideoData> => {
   const prompt = `
-    Context: You are a helpful news assistant.
-    Task: Search specifically for a relevant YouTube video URL about: "${query}".
+    Context: External System Execution.
+    Task: Execute search for: "${query}".
     
     INSTRUCTIONS:
     1. Use the search tool to find a YouTube video (watch URL).
@@ -339,9 +347,14 @@ export const generateMainContent = async (
     Escreva um Artigo SEO sobre "${topic}" (Keyword: "${keyword}"). Idioma: ${language}.
     H1 EXATO: "${structure.title}". Lead: "${structure.lead}".
     
+    REGRAS DE HTML (ESTRITAS):
+    1. Retorne APENAS 1 <article> wrapper.
+    2. Nunca aninhe <p> dentro de <p>.
+    3. TOC (Sumário) deve ser gerado UMA VEZ. Não duplique.
+    4. Não use markdown na saída final, apenas HTML puro.
+    
     INSTRUÇÃO E-E-A-T (MUITO IMPORTANTE - REFERÊNCIAS EXTERNAS):
-    Ao final do artigo (antes da conclusão), crie uma seção OBRIGATÓRIA contendo 3 links para sites de ALTA AUTORIDADE EXTERNOS (Ex: Grandes Portais de Notícias, Wikipedia, Sites Governamentais, Universidades).
-    NÃO coloque links para o site "${siteUrl || 'do usuário'}" nesta lista. Devem ser fontes EXTERNAS para dar credibilidade e validação.
+    Ao final do artigo (antes da conclusão), crie uma seção OBRIGATÓRIA contendo 3 links para sites de ALTA AUTORIDADE EXTERNOS.
     
     Use este formato HTML exato para as referências:
     <h3>🎓 Referências de Autoridade (Acesso Direto)</h3>
@@ -351,7 +364,7 @@ export const generateMainContent = async (
        <li><strong>Nome da Fonte Externa</strong>: <a href="URL_REAL_EXTERNA" target="_blank" rel="noopener nofollow">Título ou descrição do artigo citado</a></li>
     </ol>
     
-    Retorne APENAS HTML dentro de <div class="artigogenio-content"><article>... </article></div>.
+    Retorne APENAS HTML.
   `;
 
   try {
@@ -411,26 +424,95 @@ export const generateMetadata = async (topic: string, keyword: string, htmlConte
 
 export const generateMediaStrategy = async (title: string, keyword: string, language: string): Promise<{ videoData: VideoData | undefined, imageSpecs: ImageSpec[] }> => {
   try {
+      // 2️⃣ VÍDEO YOUTUBE - Orientation: DO NOT access YouTube. Generate Query, Criteria, Embed Structure.
+      // Wait for external system to insert VIDEO_ID.
+      const prompt = `
+      Create a Media Strategy (JSON) for "${title}".
+      
+      Part 1: Youtube Strategy.
+      Do NOT access YouTube directly.
+      Generate a 'youtube' object with:
+      - search_query: Ideal search term for external system.
+      - criteria: { language, min_views, max_duration }
+      - embed_template: "https://www.youtube-nocookie.com/embed/{{VIDEO_ID}}"
+      
+      Part 2: Image Specs.
+      Generate 4 image specs.
+      `;
+
       const response = await generateSmartContent(
         MODEL_PRIMARY_TEXT,
-        `Estratégia visual (JSON) para "${title}". 1 query video, 4 image specs.`,
-        { responseMimeType: "application/json", responseSchema: { type: Type.OBJECT, properties: { videoSearchQuery: { type: Type.STRING }, imageSpecs: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { role: { type: Type.STRING }, aspectRatio: { type: Type.STRING }, prompt: { type: Type.STRING }, alt: { type: Type.STRING }, title: { type: Type.STRING }, caption: { type: Type.STRING }, filename: { type: Type.STRING }, url: { type: Type.STRING } } } } } } }
+        prompt,
+        { 
+            responseMimeType: "application/json", 
+            responseSchema: { 
+                type: Type.OBJECT, 
+                properties: { 
+                    youtube: { 
+                        type: Type.OBJECT, 
+                        properties: {
+                            search_query: { type: Type.STRING },
+                            criteria: { 
+                                type: Type.OBJECT,
+                                properties: {
+                                    language: { type: Type.STRING },
+                                    min_views: { type: Type.INTEGER },
+                                    max_duration: { type: Type.STRING }
+                                }
+                            },
+                            embed_template: { type: Type.STRING }
+                        }
+                    }, 
+                    imageSpecs: { 
+                        type: Type.ARRAY, 
+                        items: { 
+                            type: Type.OBJECT, 
+                            properties: { 
+                                role: { type: Type.STRING }, 
+                                aspectRatio: { type: Type.STRING }, 
+                                prompt: { type: Type.STRING }, 
+                                alt: { type: Type.STRING }, 
+                                title: { type: Type.STRING }, 
+                                caption: { type: Type.STRING }, 
+                                filename: { type: Type.STRING }, 
+                                url: { type: Type.STRING } 
+                            } 
+                        } 
+                    } 
+                } 
+            } 
+        }
       );
       const strategy = cleanAndParseJSON(response.text);
       
-      // AUTO-BUSCA DO VÍDEO
+      // AUTO-BUSCA DO VÍDEO (External System Execution)
+      // The AI prepared the payload in strategy.youtube. Now we execute.
       let realVideoData: VideoData | undefined;
-      try { 
-          // Tenta encontrar o vídeo automaticamente, incluindo legenda e alt text
-          realVideoData = await findRealYoutubeVideo(strategy.videoSearchQuery || title); 
-      } catch (videoError) {
-          console.warn("Falha ao buscar vídeo automaticamente", videoError);
-          // Fallback vazio mas mantendo a query para busca manual
-          realVideoData = { query: strategy.videoSearchQuery || title, title: "", channel: "", url: "", embedHtml: "" }; 
+      
+      if (strategy.youtube && strategy.youtube.search_query) {
+          try { 
+              // Using the AI-generated query to perform the external search
+              realVideoData = await findRealYoutubeVideo(strategy.youtube.search_query); 
+              realVideoData.strategyPayload = strategy.youtube; // Attach payload for reference
+          } catch (videoError) {
+              console.warn("Falha ao buscar vídeo automaticamente", videoError);
+              realVideoData = { 
+                  query: strategy.youtube.search_query, 
+                  title: "", 
+                  channel: "", 
+                  url: "", 
+                  embedHtml: "",
+                  strategyPayload: strategy.youtube
+              }; 
+          }
+      } else {
+          // Fallback if AI didn't return youtube object correctly
+           realVideoData = { query: title, title: "", channel: "", url: "", embedHtml: "" }; 
       }
 
       return { videoData: realVideoData, imageSpecs: strategy.imageSpecs || [] };
-  } catch { 
+  } catch (e) { 
+      console.error("Media Strategy Error", e);
       return { videoData: undefined, imageSpecs: [] }; 
   }
 };

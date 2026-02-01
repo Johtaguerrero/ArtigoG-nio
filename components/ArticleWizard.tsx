@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Wand2, Save, FileText, BarChart2, User, Globe, 
-  CheckCircle, AlertCircle, RefreshCw, Copy, Download, Eye, Plus, Image as ImageIcon, Video, MonitorPlay, Search, Loader2, Trash2, Upload, Languages, Settings2, Edit, Lightbulb, TrendingUp, Target, List, Code2, Database, ChevronDown, FileImage, Type, Maximize2, Sparkles
+  CheckCircle, AlertCircle, RefreshCw, Copy, Download, Eye, Plus, Image as ImageIcon, Video, MonitorPlay, Search, Loader2, Trash2, Upload, Languages, Settings2, Edit, Lightbulb, TrendingUp, Target, List, Code2, Database, ChevronDown, FileImage, Type, Maximize2, Sparkles, Youtube
 } from 'lucide-react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { ArticleData, Author, GenerationProgress, ImageModelType, ImageResolution, AspectRatio } from '../types';
