@@ -17,7 +17,7 @@ const getClient = () => {
 // Configuração de Modelos
 const MODEL_PRIMARY_TEXT = 'gemini-3-flash-preview'; 
 const MODEL_FALLBACK_TEXT = 'gemini-flash-latest'; 
-const MODEL_TOOL_USE = 'gemini-3-flash-preview'; // Updated to 3.0 Flash for better tool stability
+const MODEL_TOOL_USE = 'gemini-3-flash-preview'; 
 const MODEL_IMAGE_FLASH = 'gemini-2.5-flash-image';
 const MODEL_IMAGE_PRO = 'gemini-3-pro-image-preview';
 
@@ -89,19 +89,28 @@ const cleanAndParseJSON = (text: string | undefined): any => {
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
   retries = 3,
-  delay = 3000,
+  delay = 2000,
   factor = 2
 ): Promise<T> {
   try {
     return await fn();
   } catch (error: any) {
-    const isRetryable = 
+    // Detecta erros de cota (429) ou sobrecarga (503)
+    const isQuotaError = 
       error?.status === 429 || 
+      (error?.message && (error.message.includes('429') || error.message.includes('quota') || error.message.includes('RESOURCE_EXHAUSTED')));
+      
+    const isNetworkError = 
       error?.status === 503 || 
-      (error?.message && (error.message.includes('429') || error.message.includes('overloaded') || error.message.includes('fetch') || error.message.includes('quota')));
+      (error?.message && (error.message.includes('overloaded') || error.message.includes('fetch')));
 
-    if (retries > 0 && isRetryable) {
-      await new Promise(resolve => setTimeout(resolve, delay));
+    if (retries > 0 && (isQuotaError || isNetworkError)) {
+      // Se for erro de cota, espera MUITO mais (10s inicial)
+      const waitTime = isQuotaError ? Math.max(delay, 10000) : delay;
+      
+      console.warn(`⚠️ API Limit/Quota (${isQuotaError ? '429' : 'Network'}). Aguardando ${waitTime}ms... Tentativas restantes: ${retries}`);
+      
+      await new Promise(resolve => setTimeout(resolve, waitTime));
       return retryWithBackoff(fn, retries - 1, delay * factor, factor);
     }
     throw error;
@@ -120,15 +129,21 @@ async function generateSmartContent(
   };
 
   try {
-    return await retryWithBackoff(() => runRequest(model, config), 2, 2000);
+    // Tenta primeiro com o modelo principal e configurações otimizadas
+    return await retryWithBackoff(() => runRequest(model, config), 2, 4000);
   } catch (error: any) {
     const isRecoverableError = error?.status === 429 || error?.code === 429 || error?.status === 404 || error?.code === 404 || (error?.message && (error.message.includes('429') || error.message.includes('quota') || error.message.includes('RESOURCE_EXHAUSTED') || error.message.includes('NOT_FOUND'))) || error?.status === 503;
 
     if (isRecoverableError && model !== fallbackModel) {
-      console.warn(`Modelo ${model} falhou. Fallback para ${fallbackModel}...`);
+      console.warn(`Modelo ${model} falhou ou excedeu cota. Fallback para ${fallbackModel}...`);
       const cleanConfig = { ...config };
+      // Remove configurações incompatíveis com modelos mais antigos se necessário
       if (cleanConfig.thinkingConfig) delete cleanConfig.thinkingConfig;
-      return await retryWithBackoff(() => runRequest(fallbackModel, cleanConfig), 2, 4000);
+      if (cleanConfig.responseSchema) delete cleanConfig.responseSchema; 
+      
+      // Fallback espera 6s antes de tentar
+      await new Promise(resolve => setTimeout(resolve, 6000));
+      return await retryWithBackoff(() => runRequest(fallbackModel, cleanConfig), 2, 6000);
     }
     throw error;
   }
@@ -138,70 +153,82 @@ async function generateSmartContent(
 
 export const findRealYoutubeVideo = async (query: string): Promise<VideoData> => {
   const prompt = `
-    Context: External System Execution.
-    Task: Execute search for: "${query}".
+    Find a specific YouTube video relevant to: "${query}".
     
-    INSTRUCTIONS:
-    1. Use the search tool to find a YouTube video (watch URL).
-    2. Prefer high-quality content (news, official channels, educational).
-    3. MANDATORY: Return a JSON object.
+    CRITERIA:
+    1. Prefer OFFICIAL content (News channels, Documentaries, TED Talks, Educational).
+    2. Avoid low quality vlogs or clickbait.
+    3. The video must be in Portuguese (if topic implies) or English with Portuguese relevance.
     
-    Response format (JSON only): 
-    { 
-      "title": "Video Title", 
-      "channel": "Channel Name", 
-      "url": "https://www.youtube.com/watch?v=VIDEO_ID", 
-      "caption": "Legenda jornalística em português.", 
-      "altText": "Descrição acessível do vídeo em português." 
-    }
+    OUTPUT:
+    Return a JSON object with the video title, channel name, exact URL, a journalistic caption in Portuguese, and an accessibility alt text.
   `;
 
   try {
-      // Use gemini-3-flash-preview for tools as per guidelines
-      const response = await retryWithBackoff(() => generateSmartContent(MODEL_TOOL_USE, prompt, { tools: [{ googleSearch: {} }] }));
+      const response = await retryWithBackoff(() => generateSmartContent(
+        MODEL_TOOL_USE, 
+        prompt, 
+        { 
+            tools: [{ googleSearch: {} }],
+            responseMimeType: "application/json",
+            responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                    title: { type: Type.STRING },
+                    channel: { type: Type.STRING },
+                    url: { type: Type.STRING },
+                    caption: { type: Type.STRING, description: "Jornalistic caption describing the video context in Portuguese." },
+                    altText: { type: Type.STRING, description: "Accessibility description of the video thumbnail/content." }
+                },
+                required: ["title", "url", "caption"]
+            }
+        }
+      ));
       
       let result: any;
       try {
           result = cleanAndParseJSON(response.text);
       } catch (e) {
-          console.warn("JSON Parse failed, attempting fallback regex extract", e);
-          // Fallback: extract URL from text if JSON fails. Try to capture any youtube link.
+          console.warn("Structured JSON failed, trying regex extraction.");
           const urlMatch = response.text?.match(/https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]{11})/);
           if (urlMatch) {
               result = {
                   title: query,
                   channel: "YouTube",
                   url: urlMatch[0],
-                  caption: `Vídeo sobre ${query}`,
-                  altText: `Vídeo sobre ${query}`
+                  caption: `Vídeo selecionado sobre: ${query}`,
+                  altText: `Vídeo explicativo sobre ${query}`
               };
           } else {
-             throw new Error("Could not parse JSON or find URL in text.");
+             throw new Error("Could not find a valid YouTube URL in the response.");
           }
       }
       
-      if (!result.url || result.url.includes("VIDEO_ID")) throw new Error("No valid URL found for the video.");
+      if (!result.url || (!result.url.includes("youtube.com") && !result.url.includes("youtu.be"))) {
+          throw new Error("Invalid URL returned by AI.");
+      }
 
-      // Regex atualizado para suportar youtube.com/shorts/, youtu.be, e youtube.com/watch
-      // [\w-] captures alphanumeric plus underscore and hyphen, which covers YouTube IDs.
+      // Validação e Extração de ID Segura
       const regExp = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([\w-]{11})/;
       const match = result.url.match(regExp);
       const videoId = match ? match[1] : null;
 
       if (videoId) {
-         const embedTitle = result.altText || result.title;
+         const embedTitle = result.altText || result.title || "Video Player";
+         const safeEmbedHtml = `<iframe width="100%" height="100%" src="https://www.youtube-nocookie.com/embed/${videoId}" title="${embedTitle}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+
          return {
             query: query,
-            title: result.title || "Video",
+            title: result.title || "Vídeo Recomendado",
             channel: result.channel || "YouTube",
             url: result.url,
-            embedHtml: `<iframe width="100%" height="100%" src="https://www.youtube-nocookie.com/embed/${videoId}" title="${embedTitle}" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`,
+            embedHtml: safeEmbedHtml,
             thumbnailUrl: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
-            caption: result.caption || `Assista ao vídeo sobre: ${query}`,
-            altText: result.altText || `Vídeo explicativo sobre ${query}`
+            caption: result.caption || `Assista: ${result.title}`,
+            altText: result.altText || `Vídeo sobre ${query}`
          };
       } else {
-          throw new Error("Invalid YouTube URL format.");
+          throw new Error("Invalid YouTube ID extracted.");
       }
   } catch (error) {
       console.error("Failed to find video:", error);

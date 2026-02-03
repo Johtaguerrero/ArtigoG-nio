@@ -2,15 +2,19 @@ import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ mode }) => {
-  // Carrega variáveis de ambiente, incluindo aquelas que não começam com VITE_
-  // Fix: Cast process to any to resolve TS error "Property 'cwd' does not exist on type 'Process'"
+  // Carrega variáveis de ambiente locais (.env)
   const env = loadEnv(mode, (process as any).cwd(), '');
+
+  // CRÍTICO PARA NETLIFY: 
+  // Durante o build no servidor, a chave está em process.env.API_KEY, não necessariamente no objeto 'env' do loadEnv.
+  // Priorizamos a variável do sistema (process.env) e usamos o .env local como fallback.
+  const apiKey = process.env.API_KEY || env.API_KEY;
 
   return {
     plugins: [react()],
-    // Define process.env.API_KEY globalmente para o navegador
+    // Define a substituição global da string 'process.env.API_KEY' pelo valor real da chave
     define: {
-      'process.env.API_KEY': JSON.stringify(env.API_KEY)
+      'process.env.API_KEY': JSON.stringify(apiKey)
     },
     build: {
       outDir: 'dist',

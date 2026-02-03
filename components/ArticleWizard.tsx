@@ -17,6 +17,9 @@ const generateId = () => {
   return Date.now().toString(36) + Math.random().toString(36).substring(2);
 };
 
+// Helper de Throttling para evitar 429
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
 const StepIndicator = ({ step, current }: { step: number, current: number }) => {
   const isCompleted = step < current;
   const isCurrent = step === current;
@@ -146,10 +149,14 @@ export const ArticleWizard: React.FC = () => {
       setProgress({ step: `Analisando SERP (${article.language})...`, percentage: 10 });
       const serpData = await geminiService.analyzeSerp(article.targetKeyword, article.language);
       
+      await delay(2000); // Throttling
+
       // 2. Structure Generation
       setProgress({ step: 'Criando estrutura otimizada (E-E-A-T)...', percentage: 25 });
       const structure = await geminiService.generateArticleStructure(article.topic, article.targetKeyword, serpData, article.language);
       
+      await delay(3000); // Throttling mais agressivo
+
       // 3. Main Content Generation
       setProgress({ step: 'Escrevendo conteúdo e criando Links Internos...', percentage: 50 });
       const htmlBody = await geminiService.generateMainContent(
@@ -164,9 +171,13 @@ export const ArticleWizard: React.FC = () => {
         currentAuthor?.name
       );
 
+      await delay(3000); // Throttling
+
       // 4. Media Strategy (Video + Images)
       setProgress({ step: 'Planejando Mídia (Vídeo e Imagens SEO)...', percentage: 75 });
       const mediaData = await geminiService.generateMediaStrategy(structure.title, article.targetKeyword, article.language);
+
+      await delay(2000); // Throttling
 
       // AUTO HERO GENERATION - DEFAULT TO FLASH FOR SPEED
       if (mediaData.imageSpecs.length > 0) {
@@ -186,6 +197,8 @@ export const ArticleWizard: React.FC = () => {
              console.warn("Auto-hero generation failed", e);
           }
       }
+
+      await delay(2000); // Throttling
 
       // 5. Metadata (Updated to return SeoData)
       setProgress({ step: 'Gerando metadados e schema JSON-LD...', percentage: 90 });
@@ -249,7 +262,7 @@ export const ArticleWizard: React.FC = () => {
 
       // Tradução amigável para erros comuns
       if (errorMessage.includes("429") || errorMessage.includes("quota") || errorMessage.includes("RESOURCE_EXHAUSTED")) {
-          errorMessage = "Limite de cota excedido (Erro 429). O sistema tentou recuperar mas a demanda está alta. Por favor, aguarde alguns instantes ou verifique sua API Key.";
+          errorMessage = "Limite de requisições excedido (Erro 429). O sistema tentou reprocessar mas a API está ocupada. Aguarde alguns minutos e tente novamente.";
       }
 
       setError(errorMessage);
