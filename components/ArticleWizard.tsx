@@ -20,6 +20,34 @@ const generateId = () => {
 // Helper de Throttling para evitar 429
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Helper para limpar mensagens de erro da API
+const parseErrorMessage = (error: any): string => {
+  let msg = error.message || "Erro desconhecido";
+  
+  // Tenta extrair mensagem JSON se estiver embutida
+  try {
+      const jsonMatch = msg.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+          const errorObj = JSON.parse(jsonMatch[0]);
+          if (errorObj.error && errorObj.error.message) {
+              msg = errorObj.error.message;
+          }
+      }
+  } catch (e) {
+      // Falha silenciosa no parse, usa a mensagem original
+  }
+
+  // Traduções amigáveis
+  if (msg.includes("429") || msg.includes("quota") || msg.includes("RESOURCE_EXHAUSTED")) {
+      return "Limite de cota excedido (Erro 429). Aguarde alguns instantes ou verifique sua API Key.";
+  }
+  if (msg.includes("API key not valid")) {
+      return "Chave de API inválida. Verifique suas configurações.";
+  }
+  
+  return msg;
+};
+
 const StepIndicator = ({ step, current }: { step: number, current: number }) => {
   const isCompleted = step < current;
   const isCurrent = step === current;
@@ -190,11 +218,18 @@ export const ArticleWizard: React.FC = () => {
              setProgress({ step: 'Renderizando Hero Image...', percentage: 85 });
              const heroBase64 = await geminiService.generateImageFromPrompt(heroSpec.prompt, heroSpec.aspectRatio, modelToUse, resToUse);
              
-             mediaData.imageSpecs[0].url = `data:image/jpeg;base64,${heroBase64}`;
+             // Se retornar URL de placeholder (começa com http), use direto, senão converte base64
+             if (heroBase64.startsWith('http')) {
+                mediaData.imageSpecs[0].url = heroBase64;
+             } else {
+                mediaData.imageSpecs[0].url = `data:image/jpeg;base64,${heroBase64}`;
+             }
+             
              mediaData.imageSpecs[0].generatedWith = modelToUse;
              mediaData.imageSpecs[0].resolution = resToUse;
           } catch (e) {
              console.warn("Auto-hero generation failed", e);
+             // Não falha o processo todo se a imagem falhar
           }
       }
 
@@ -242,30 +277,8 @@ export const ArticleWizard: React.FC = () => {
 
     } catch (e: any) {
       console.error(e);
-      // TRATAMENTO DE ERRO MELHORADO
-      let errorMessage = e.message || "Erro desconhecido";
-      
-      // Tenta parsear JSON dentro da mensagem de erro se existir
-      try {
-          const jsonStart = errorMessage.indexOf('{');
-          const jsonEnd = errorMessage.lastIndexOf('}');
-          if (jsonStart !== -1 && jsonEnd !== -1) {
-              const jsonStr = errorMessage.substring(jsonStart, jsonEnd + 1);
-              const errorObj = JSON.parse(jsonStr);
-              if (errorObj.error && errorObj.error.message) {
-                  errorMessage = errorObj.error.message;
-              }
-          }
-      } catch (parseErr) {
-          // Mantém mensagem original se falhar
-      }
-
-      // Tradução amigável para erros comuns
-      if (errorMessage.includes("429") || errorMessage.includes("quota") || errorMessage.includes("RESOURCE_EXHAUSTED")) {
-          errorMessage = "Limite de requisições excedido (Erro 429). O sistema tentou reprocessar mas a API está ocupada. Aguarde alguns minutos e tente novamente.";
-      }
-
-      setError(errorMessage);
+      const friendlyMsg = parseErrorMessage(e);
+      setError(friendlyMsg);
       setCurrentStep(1); // Voltar para edição
     } finally {
       setIsGenerating(false);
@@ -341,8 +354,10 @@ export const ArticleWizard: React.FC = () => {
       const model = article.imageSettings?.model || 'gemini-2.5-flash-image';
       const resolution = article.imageSettings?.resolution || '1K';
 
-      const base64Data = await geminiService.generateImageFromPrompt(prompt, spec.aspectRatio, model, resolution);
-      const dataUrl = `data:image/jpeg;base64,${base64Data}`;
+      const resultData = await geminiService.generateImageFromPrompt(prompt, spec.aspectRatio, model, resolution);
+      
+      // Checa se é URL ou Base64
+      const dataUrl = resultData.startsWith('http') ? resultData : `data:image/jpeg;base64,${resultData}`;
       
       const newSpecs = [...(article.imageSpecs || [])];
       newSpecs[index] = { 
@@ -355,7 +370,8 @@ export const ArticleWizard: React.FC = () => {
       saveArticle({ ...article, imageSpecs: newSpecs });
     } catch (e: any) {
       console.error(e);
-      alert(`Erro ao gerar imagem: ${e.message}`);
+      const friendlyMsg = parseErrorMessage(e);
+      alert(`Erro ao gerar imagem: ${friendlyMsg}`);
     } finally {
       setGeneratingImageIndex(null);
     }
@@ -381,9 +397,9 @@ export const ArticleWizard: React.FC = () => {
       setArticle({ ...article, imageSpecs: newSpecs });
       saveArticle({ ...article, imageSpecs: newSpecs });
       setEditingImageIndex(null); // Close modal
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert("Falha ao editar imagem.");
+      alert(`Falha ao editar imagem: ${parseErrorMessage(e)}`);
     } finally {
       setIsEditingImage(false);
     }
@@ -435,9 +451,7 @@ export const ArticleWizard: React.FC = () => {
 
     } catch (e: any) {
       console.error(e);
-      let msg = "Erro ao buscar vídeo.";
-      if (e.message) msg += ` ${e.message}`;
-      if (e.message.includes("429")) msg = "Limite de requisições excedido. Tente novamente em alguns segundos.";
+      let msg = parseErrorMessage(e);
       alert(msg);
     } finally {
       setIsSearchingVideo(false);
@@ -604,7 +618,7 @@ export const ArticleWizard: React.FC = () => {
       </div>
       
       {error && (
-        <div className="mt-6 p-4 bg-red-50 text-red-700 rounded-lg border border-red-200 flex items-center gap-2">
+        <div className="mt-6 p-4 bg-red-50 text-red-700 rounded-lg border border-red-200 flex items-center gap-2 animate-fade-in">
           <AlertCircle size={20} className="shrink-0" />
           <span className="text-sm">{error}</span>
         </div>
@@ -946,7 +960,7 @@ export const ArticleWizard: React.FC = () => {
 
                          {/* Image Preview Area */}
                          <div className="relative aspect-video bg-slate-100 border-b border-slate-100 flex items-center justify-center overflow-hidden">
-                            {img.url && img.url.startsWith('data:') ? (
+                            {img.url && (img.url.startsWith('data:') || img.url.startsWith('http')) ? (
                                 <>
                                     <img src={img.url} alt={img.alt} className="w-full h-full object-contain" />
                                     {/* Overlay Info */}
@@ -1002,7 +1016,7 @@ export const ArticleWizard: React.FC = () => {
                            </div>
 
                            {/* Regenerate Button (if image exists) */}
-                           {img.url && img.url.startsWith('data:') && (
+                           {img.url && (img.url.startsWith('data:') || img.url.startsWith('http')) && (
                                 <button 
                                     onClick={() => handleGenerateImage(idx, img.prompt)}
                                     disabled={generatingImageIndex === idx}
