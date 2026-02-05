@@ -87,7 +87,8 @@ export const publishToWordPress = async (
             content: article.htmlContent, // O HTML gerado pela IA
             status: 'draft', // Sempre como rascunho por segurança
             slug: article.seoData?.slug || article.targetKeyword.replace(/ /g, '-').toLowerCase(),
-            excerpt: article.metaDescription, // Meta descrição vai para o resumo
+            // Usa o novo Resumo Viral (Wordpress Excerpt) se disponível, senão fallback
+            excerpt: article.seoData?.wordpressExcerpt || article.metaDescription || article.seoData?.metaDescription,
             featured_media: featuredMediaId > 0 ? featuredMediaId : undefined, // Vincula a imagem enviada
             comment_status: 'open',
             ping_status: 'open'

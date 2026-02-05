@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Wand2, Save, FileText, BarChart2, User, Globe, 
-  CheckCircle, AlertCircle, RefreshCw, Copy, Download, Eye, Plus, Image as ImageIcon, Video, MonitorPlay, Search, Loader2, Trash2, Upload, Languages, Settings2, Edit, Lightbulb, TrendingUp, Target, List, Code2, Database, ChevronDown, FileImage, Type, Maximize2, Sparkles, Youtube
+  CheckCircle, AlertCircle, RefreshCw, Copy, Download, Eye, Plus, Image as ImageIcon, Video, MonitorPlay, Search, Loader2, Trash2, Upload, Languages, Settings2, Edit, Lightbulb, TrendingUp, Target, List, Code2, Database, ChevronDown, FileImage, Type, Maximize2, Sparkles, Youtube, Zap
 } from 'lucide-react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { ArticleData, Author, GenerationProgress, ImageModelType, ImageResolution, AspectRatio } from '../types';
@@ -1147,6 +1147,21 @@ export const ArticleWizard: React.FC = () => {
                                         {article.seoData?.tags?.join(', ') || "Nenhuma tag gerada."}
                                         </p>
                                      </div>
+                                 </div>
+                                 {/* Novo Campo Resumo Viral WP */}
+                                 <div className="mt-4 pt-4 border-t border-slate-100">
+                                     <div className="flex justify-between items-center mb-2">
+                                         <h4 className="text-xs font-bold text-purple-600 uppercase flex items-center gap-1"><Zap size={14}/> Resumo Viral (WordPress)</h4>
+                                         <span className={`text-[10px] font-mono ${ (article.seoData?.wordpressExcerpt?.length || 0) > 180 ? 'text-red-500' : 'text-slate-400' }`}>
+                                            {article.seoData?.wordpressExcerpt?.length || 0}/180
+                                         </span>
+                                     </div>
+                                     <SeoCopyField 
+                                         label="Resumo Otimizado (Excerpt)" 
+                                         value={article.seoData?.wordpressExcerpt || ''} 
+                                         multiline 
+                                         helper="Resumo viral de alto CTR, ideal para o algoritmo de recomendação do Google."
+                                     />
                                  </div>
                              </div>
                          </div>

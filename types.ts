@@ -1,3 +1,4 @@
+
 export interface Author {
   id: string;
   name: string;
@@ -71,6 +72,7 @@ export interface SeoData {
   tags: string[]; // 10 items
   lsiKeywords: string[]; // Mantido para compatibilidade
   opportunities: SeoOpportunities;
+  wordpressExcerpt?: string; // New: Resumo Viral (180 chars)
 }
 
 export interface ArticleData {

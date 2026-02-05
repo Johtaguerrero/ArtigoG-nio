@@ -435,8 +435,35 @@ export const generateMetadata = async (topic: string, keyword: string, htmlConte
     try {
         const response = await generateSmartContent(
             MODEL_PRIMARY_TEXT,
-            `Gere SEO JSON para "${topic}". MetaDesc máx 156 chars. SeoTitle máx 60 chars.`,
-            { responseMimeType: "application/json", responseSchema: { type: Type.OBJECT, properties: { seoTitle: { type: Type.STRING }, metaDescription: { type: Type.STRING }, slug: { type: Type.STRING }, targetKeyword: { type: Type.STRING }, synonyms: { type: Type.ARRAY, items: { type: Type.STRING } }, relatedKeyphrase: { type: Type.STRING }, tags: { type: Type.ARRAY, items: { type: Type.STRING } }, lsiKeywords: { type: Type.ARRAY, items: { type: Type.STRING } }, opportunities: { type: Type.OBJECT, properties: { featuredSnippet: { type: Type.STRING }, paa: { type: Type.ARRAY, items: { type: Type.STRING } }, googleNews: { type: Type.STRING } } } } } }
+            `Gere SEO JSON para "${topic}". 
+            MetaDesc máx 156 chars (informativa). 
+            SeoTitle máx 60 chars.
+            WordPressExcerpt máx 180 chars (VIRAL, instigante, para atrair cliques).`,
+            { 
+                responseMimeType: "application/json", 
+                responseSchema: { 
+                    type: Type.OBJECT, 
+                    properties: { 
+                        seoTitle: { type: Type.STRING }, 
+                        metaDescription: { type: Type.STRING }, 
+                        slug: { type: Type.STRING }, 
+                        targetKeyword: { type: Type.STRING }, 
+                        synonyms: { type: Type.ARRAY, items: { type: Type.STRING } }, 
+                        relatedKeyphrase: { type: Type.STRING }, 
+                        tags: { type: Type.ARRAY, items: { type: Type.STRING } }, 
+                        lsiKeywords: { type: Type.ARRAY, items: { type: Type.STRING } }, 
+                        wordpressExcerpt: { type: Type.STRING, description: "Resumo viral e instigante de até 180 caracteres para WordPress, focado em alta taxa de clique (CTR)." },
+                        opportunities: { 
+                            type: Type.OBJECT, 
+                            properties: { 
+                                featuredSnippet: { type: Type.STRING }, 
+                                paa: { type: Type.ARRAY, items: { type: Type.STRING } }, 
+                                googleNews: { type: Type.STRING } 
+                            } 
+                        } 
+                    } 
+                } 
+            }
         );
         return cleanAndParseJSON(response.text);
     } catch (e) { 
