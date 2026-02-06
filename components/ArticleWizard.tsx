@@ -951,7 +951,7 @@ export const ArticleWizard: React.FC = () => {
                                 }}
                                 className="text-xs bg-white border border-slate-200 rounded px-2 py-1 outline-none focus:ring-1 focus:ring-blue-500 font-mono text-slate-600 cursor-pointer hover:border-slate-300"
                              >
-                                {['1:1', '3:4', '4:3', '9:16', '16:9', '21:9'].map(ratio => (
+                                {['1:1', '2:3', '3:2', '3:4', '4:3', '9:16', '16:9', '21:9'].map(ratio => (
                                     <option key={ratio} value={ratio}>{ratio}</option>
                                 ))}
                              </select>

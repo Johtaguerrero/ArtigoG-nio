@@ -6,13 +6,22 @@ import { getBrowserApiKey } from "./storageService";
 // Se true, paramos de tentar gerar imagens para economizar tempo do usuário
 let GLOBAL_IMAGE_QUOTA_EXHAUSTED = false;
 
-// Helper to get client with dynamic key
+// Helper to get client with dynamic key priority
 const getClient = () => {
-  const apiKey = process.env.API_KEY || getBrowserApiKey();
+  // CRITICAL CHANGE FOR PRODUCTION RESILIENCE:
+  // 1. Try Browser Key first (allows user to fix 429 errors instantly via Settings)
+  // 2. Fallback to Env Key (bundled via Netlify)
+  const browserKey = getBrowserApiKey();
+  const envKey = process.env.API_KEY; // Injected by Vite at build time
+
+  // Remove quotes if they were accidentally included in the env var string
+  const cleanEnvKey = envKey ? envKey.replace(/^"|"$/g, '') : '';
+  
+  const apiKey = browserKey || cleanEnvKey;
   
   if (!apiKey) {
-    console.error("API Key não encontrada.");
-    throw new Error("Chave de API ausente. Vá em 'Configurações' e insira sua API Key.");
+    console.error("API Key não encontrada (Nem no Storage, nem no ENV).");
+    throw new Error("Chave de API ausente. Vá em 'Configurações' e insira sua API Key para ativar a IA.");
   }
 
   return new GoogleGenAI({ apiKey });
@@ -21,8 +30,9 @@ const getClient = () => {
 // Configuração de Modelos - ATUALIZADO PARA VERSÕES ESTÁVEIS E GUIDELINES
 const MODEL_PRIMARY_TEXT = 'gemini-3-pro-preview'; // Para tarefas complexas de escrita e raciocínio
 const MODEL_FALLBACK_TEXT = 'gemini-3-flash-preview'; // Para tarefas mais simples ou fallback
-const MODEL_TOOL_USE = 'gemini-3-flash-preview'; // Para uso de ferramentas e busca rápida
+const MODEL_TOOL_USE = 'gemini-3-flash-preview'; // Para uso de ferramentas e busca rápida (Search Grounding)
 const MODEL_IMAGE_FLASH = 'gemini-2.5-flash-image'; // Modelo padrão para geração rápida de imagens
+const MODEL_IMAGE_PRO = 'gemini-3-pro-image-preview'; // Modelo de Alta Qualidade (Preview)
 const MODEL_IMAGE_BACKUP = 'gemini-2.5-flash-image'; // Fallback para imagens
 
 // --- SYSTEM PERSONA ---
@@ -89,6 +99,15 @@ const cleanAndParseJSON = (text: string | undefined): any => {
         throw new Error("A resposta da IA não é um JSON válido. Tente novamente.");
     }
 };
+
+// Algoritmo Fisher-Yates para embaralhar array
+function shuffleArray<T>(array: T[]): T[] {
+    for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+    }
+    return array;
+}
 
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
@@ -163,25 +182,31 @@ async function generateSmartContent(
 // --- CORE FUNCTIONS ---
 
 export const findRealYoutubeVideo = async (query: string): Promise<VideoData> => {
-  // Lógica mais robusta para vídeo
+  // Lógica de Grounding com Google Search para encontrar vídeo REAL e de ALTA QUALIDADE
   const prompt = `
-    Find a specific YouTube video relevant to: "${query}".
+    TASK: Find the single most relevant, authoritative, and high-quality YouTube video about: "${query}".
     
-    CRITERIA:
-    1. Prefer OFFICIAL content (News channels, Documentaries, TED Talks, Educational).
-    2. Avoid low quality vlogs or clickbait.
-    3. The video must be in Portuguese (if topic implies) or English with Portuguese relevance.
+    INSTRUCTIONS:
+    1. Use Google Search to find a REAL, working YouTube URL. 
+    2. PRIORITIZE: Official news channels (BBC, CNN, G1, etc), Educational Institutions, TED Talks, or highly verified creators.
+    3. AVOID: Low quality vlogs, clickbait, or unverified sources.
+    4. The video should be in Portuguese if the query is in Portuguese.
     
     OUTPUT:
-    Return a JSON object with the video title, channel name, exact URL, a journalistic caption in Portuguese, and an accessibility alt text.
+    Return a JSON object with:
+    - title: Exact video title.
+    - channel: Channel name.
+    - url: The full, valid YouTube URL (e.g., https://www.youtube.com/watch?v=...).
+    - caption: A professional, journalistic caption in Portuguese explaining why this video is valuable for the reader.
+    - altText: SEO-optimized accessibility description (e.g., "Vídeo explicativo do canal X sobre Y").
   `;
 
   try {
       const response = await retryWithBackoff(() => generateSmartContent(
-        MODEL_TOOL_USE, 
+        MODEL_TOOL_USE, // gemini-3-flash-preview
         prompt, 
         { 
-            tools: [{ googleSearch: {} }],
+            tools: [{ googleSearch: {} }], // ENABLE SEARCH GROUNDING
             responseMimeType: "application/json",
             responseSchema: {
                 type: Type.OBJECT,
@@ -198,16 +223,37 @@ export const findRealYoutubeVideo = async (query: string): Promise<VideoData> =>
       ));
       
       let result: any;
+      
+      // Tenta parsear o JSON retornado (que agora deve conter dados reais do Search)
       try {
           result = cleanAndParseJSON(response.text);
       } catch (e) {
-          console.warn("Structured JSON failed, trying regex extraction.");
-          const urlMatch = response.text?.match(/https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]{11})/);
-          if (urlMatch) {
+          // Fallback: se o JSON falhar, tenta extrair URL do texto ou do grounding metadata
+          console.warn("Structured JSON failed, checking grounding chunks or regex.");
+          
+          // Verifica Grounding Chunks se disponível (backup)
+          const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+          let foundUrl = "";
+          
+          if (chunks) {
+              for (const chunk of chunks) {
+                  if (chunk.web?.uri && (chunk.web.uri.includes("youtube.com") || chunk.web.uri.includes("youtu.be"))) {
+                      foundUrl = chunk.web.uri;
+                      break;
+                  }
+              }
+          }
+
+          if (!foundUrl) {
+               const urlMatch = response.text?.match(/https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([\w-]{11})/);
+               if (urlMatch) foundUrl = urlMatch[0];
+          }
+
+          if (foundUrl) {
               result = {
                   title: query,
                   channel: "YouTube",
-                  url: urlMatch[0],
+                  url: foundUrl,
                   caption: `Vídeo selecionado sobre: ${query}`,
                   altText: `Vídeo explicativo sobre ${query}`
               };
@@ -329,17 +375,19 @@ export const generateMainContent = async (
         let domain = siteUrl.trim().replace(/^https?:\/\//, '');
         if (domain.endsWith('/')) domain = domain.slice(0, -1);
         
+        // --- BUSCA DE LINKS INTERNOS OTIMIZADA PARA ALEATORIEDADE E ANTIGUIDADE ---
         const linkSearchResponse = await generateSmartContent(
             MODEL_FALLBACK_TEXT,
-            `Task: Find exactly 3 articles from the website "${domain}".
-            Priority 1: Try to find articles vaguely related to "${keyword}".
-            Priority 2: If no relevant matches, JUST RETURN ANY 3 RECENT OR POPULAR articles from "${domain}". 
-            Convergence with title is NOT required. Just get links from the site.
+            `Task: Perform a broad site search on "${domain}" to discover various blog posts for internal linking.
             
-            Query: "site:${domain}"
+            1. Search for at least 15 valid blog post/article URLs from "site:${domain}".
+            2. TRY to find OLDER articles or random topics, not just the newest ones.
+            3. IGNORE homepage, category pages, tags, or contact pages.
+            4. Return a JSON array of objects.
             
-            Return JSON array: [{"title": "Article Title", "url": "https://${domain}/..."}]
-            Ensure URLs belong to ${domain}. Max 3 items.`,
+            Query: "site:${domain} blog OR artigo OR dicas"
+            
+            Return JSON format: [{"title": "Article Title", "url": "https://${domain}/path"}]`,
             { tools: [{ googleSearch: {} }] }
         );
 
@@ -348,19 +396,46 @@ export const generateMainContent = async (
             foundLinks = cleanAndParseJSON(linkSearchResponse.text);
         } catch {
             const matches = linkSearchResponse.text?.match(/https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/g) || [];
-            foundLinks = matches.filter(u => u.includes(domain)).map(u => ({ title: `Veja também`, url: u })).slice(0, 3);
+            foundLinks = matches.filter(u => u.includes(domain)).map(u => ({ title: `Veja também`, url: u }));
         }
 
         if (Array.isArray(foundLinks) && foundLinks.length > 0) {
-            const uniqueLinks = Array.from(new Map(foundLinks.map(item => [item.url, item])).values());
-            const validLinks = uniqueLinks.filter(l => l.url && l.url.includes(domain)).slice(0, 3);
+            // Remove duplicatas
+            const uniqueLinksMap = new Map();
+            foundLinks.forEach(item => {
+                if (item.url && item.url.includes(domain)) {
+                    // Limpa URL para evitar duplicatas por parâmetros de query
+                    const cleanUrl = item.url.split('?')[0]; 
+                    if (!uniqueLinksMap.has(cleanUrl)) {
+                        uniqueLinksMap.set(cleanUrl, item);
+                    }
+                }
+            });
+            
+            let allValidLinks = Array.from(uniqueLinksMap.values());
 
-            if (validLinks.length > 0) {
+            // --- SHUFFLE (Aleatoriedade Real) ---
+            // Embaralha a lista completa antes de pegar os 3 primeiros.
+            // Isso garante que se a IA retornar 10 links, a cada geração pegaremos 3 diferentes.
+            const shuffledLinks = shuffleArray(allValidLinks);
+            
+            // Pega os top 3
+            const selectedLinks = shuffledLinks.slice(0, 3);
+
+            if (selectedLinks.length > 0) {
                 internalLinksBlock = `
-<div class="internal-links-section mt-8 mb-8">
-  <h3 class="text-xl font-bold text-slate-800 mb-4 flex items-center gap-2">🎓 Leia também</h3>
-  <ul class="space-y-2 list-disc pl-5 marker:text-slate-400">
-    ${validLinks.map(l => `<li class="pl-1"><a href="${l.url}" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline font-medium hover:text-blue-800 transition-colors">${l.title}</a></li>`).join('')}
+<div class="internal-links-section mt-8 mb-8 p-6 bg-slate-50 rounded-xl border border-slate-200">
+  <h3 class="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+    Leia também no nosso site
+  </h3>
+  <ul class="space-y-3">
+    ${selectedLinks.map(l => `
+      <li class="flex items-start gap-2">
+        <span class="text-blue-400 mt-1.5">•</span>
+        <a href="${l.url}" target="_self" class="text-blue-700 hover:text-blue-900 hover:underline font-medium transition-colors">${l.title}</a>
+      </li>
+    `).join('')}
   </ul>
 </div>`;
             }
@@ -472,19 +547,89 @@ export const generateMetadata = async (topic: string, keyword: string, htmlConte
 };
 
 export const generateMediaStrategy = async (title: string, keyword: string, language: string): Promise<{ videoData: VideoData | undefined, imageSpecs: ImageSpec[] }> => {
+  // FALLBACK FUNCTION: Creates default photojournalism specs if AI fails
+  const createFallbackSpecs = (baseTitle: string): ImageSpec[] => [
+      {
+          role: 'hero',
+          aspectRatio: '16:9',
+          prompt: `Photojournalistic wide shot of ${baseTitle}. Cinematic lighting, high detail, 8k, realistic style, taken with 35mm lens. No text.`,
+          alt: `${baseTitle} - main view`,
+          title: baseTitle,
+          caption: `Overview of ${baseTitle}`,
+          filename: `${baseTitle.toLowerCase().replace(/[^a-z0-9]/g, '-')}-hero.jpg`,
+          url: ''
+      },
+      {
+          role: 'instagram_portrait',
+          aspectRatio: '3:4', // Map 4:5 concept to 3:4 for API compatibility
+          prompt: `Vertical portrait shot of ${baseTitle}, focusing on details. Depth of field, f/1.8, photojournalism style. No text.`,
+          alt: `${baseTitle} - detail view`,
+          title: `${baseTitle} Detail`,
+          caption: `Close up detail of ${baseTitle}`,
+          filename: `${baseTitle.toLowerCase().replace(/[^a-z0-9]/g, '-')}-insta.jpg`,
+          url: ''
+      },
+      {
+          role: 'square',
+          aspectRatio: '1:1',
+          prompt: `Square composition of ${baseTitle}. Balanced symmetry, realistic texture, photojournalism style. No text.`,
+          alt: `${baseTitle} - square view`,
+          title: `${baseTitle} Square`,
+          caption: `Balanced shot of ${baseTitle}`,
+          filename: `${baseTitle.toLowerCase().replace(/[^a-z0-9]/g, '-')}-sq.jpg`,
+          url: ''
+      },
+      {
+          role: 'story',
+          aspectRatio: '9:16',
+          prompt: `Immersive full vertical shot of ${baseTitle} for mobile story. Atmospheric, photojournalism style. No text.`,
+          alt: `${baseTitle} - story view`,
+          title: `${baseTitle} Story`,
+          caption: `Vertical story shot of ${baseTitle}`,
+          filename: `${baseTitle.toLowerCase().replace(/[^a-z0-9]/g, '-')}-story.jpg`,
+          url: ''
+      }
+  ];
+
   try {
+      // ----------------------------------------------------------------------
+      // NEW PROMPT STRATEGY: PROFESSIONAL PHOTOJOURNALISM & CALL TO ACTION
+      // ----------------------------------------------------------------------
       const prompt = `
-      Create a Media Strategy (JSON) for "${title}".
-      
-      Part 1: Youtube Strategy.
-      Do NOT access YouTube directly.
-      Generate a 'youtube' object with:
-      - search_query: Ideal search term for external system.
+      Create a Complete Media Strategy (JSON) for the article: "${title}".
+      Language: ${language}.
+
+      PART 1: YOUTUBE STRATEGY
+      Do NOT access YouTube directly. Generate a 'youtube' object with:
+      - search_query: Ideal search term for external system (Video).
       - criteria: { language, min_views, max_duration }
       - embed_template: "https://www.youtube-nocookie.com/embed/{{VIDEO_ID}}"
       
-      Part 2: Image Specs.
-      Generate 4 image specs.
+      PART 2: IMAGE SPECS (THE "PACK DE IMAGENS IA + SEO COMPLETO")
+      You MUST generate exactly 4 image specs representing a Professional Photojournalistic Set.
+      
+      STRICT REQUIREMENTS FOR IMAGES:
+      1. STYLE: Award-winning photojournalism, National Geographic style, Realistic, "Taken by Camera" (DSLR/Mirrorless).
+         - CRITICAL: NO TEXT, NO TYPOGRAPHY, NO WATERMARKS, NO SIGNS with readable text.
+         - Use Keywords in prompt: "Cinematic lighting", "35mm lens", "f/1.8", "Natural light", "High detail", "Raw photo style", "No text".
+      
+      2. ROLES & ASPECT RATIOS (MANDATORY):
+         - Image 1: 'hero' | Aspect Ratio: '16:9'.
+           * CONCEPT: This is the "Call to Action" image. High impact, wide shot.
+         - Image 2: 'instagram_portrait' | Aspect Ratio: '3:4'.
+           * CONCEPT: Vertical composition, focused on subject/detail.
+         - Image 3: 'square' | Aspect Ratio: '1:1'.
+           * CONCEPT: Balanced composition, close-up or symmetrical.
+         - Image 4: 'story' | Aspect Ratio: '9:16'.
+           * CONCEPT: Full vertical immersive shot, background heavy or full body.
+
+      3. SEO METADATA (MANDATORY & HIGH QUALITY):
+         - Filename: SEO optimized, lowercase, hyphens, NO spaces (e.g., "keyword-hero-shot-hd.jpg").
+         - Alt Text: Rich descriptive accessibility text including the keyword (min 10 words).
+         - Title: Engaging title for the image file.
+         - Caption: Journalistic caption describing the scene (Who, what, where).
+
+      Output JSON format.
       `;
 
       const response = await generateSmartContent(
@@ -553,10 +698,21 @@ export const generateMediaStrategy = async (title: string, keyword: string, lang
            realVideoData = { query: title, title: "", channel: "", url: "", embedHtml: "" }; 
       }
 
-      return { videoData: realVideoData, imageSpecs: strategy.imageSpecs || [] };
+      // Validate Image Specs: ensure we have 4, if not, fill from fallback
+      let finalSpecs = strategy.imageSpecs || [];
+      if (finalSpecs.length === 0) {
+          finalSpecs = createFallbackSpecs(keyword);
+      }
+
+      return { videoData: realVideoData, imageSpecs: finalSpecs };
   } catch (e) { 
-      console.error("Media Strategy Error", e);
-      return { videoData: undefined, imageSpecs: [] }; 
+      console.error("Media Strategy Error - Using Fallback", e);
+      // Fallback robusto: Retorna specs manuais se a IA falhar na estratégia
+      const fallbackSpecs = createFallbackSpecs(keyword);
+      return { 
+          videoData: { query: title, title: "", channel: "", url: "", embedHtml: "" }, 
+          imageSpecs: fallbackSpecs 
+      }; 
   }
 };
 
@@ -595,21 +751,47 @@ export const generateImageFromPrompt = async (prompt: string, aspectRatio: Aspec
 
   const ai = getClient();
   
-  // Mapeamento forçado para modelo estável se o usuário escolheu o antigo
+  // Mapeamento forçado para modelo estável se o usuário escolheu o antigo ou padrão
   let actualModel = model;
   if (model === 'gemini-2.5-flash-image') {
-      actualModel = MODEL_IMAGE_FLASH; // Usa o 'gemini-2.5-flash-image'
+      actualModel = MODEL_IMAGE_FLASH; 
   }
 
-  const config: any = { imageConfig: { aspectRatio: aspectRatio === '2:3' ? '3:4' : aspectRatio === '3:2' ? '4:3' : aspectRatio === '21:9' ? '16:9' : aspectRatio } };
-  // Apenas Pro suporta Image Size
-  if (actualModel.includes('pro')) {
+  // Sanitize Aspect Ratio for Gemini API (Supports: 1:1, 3:4, 4:3, 9:16, 16:9)
+  let validAspectRatio = aspectRatio;
+  const supportedRatios = ['1:1', '3:4', '4:3', '9:16', '16:9'];
+  
+  if (!supportedRatios.includes(validAspectRatio)) {
+      // Mapping unsupported ratios to closest supported ones
+      switch (validAspectRatio) {
+          case '2:3':
+              validAspectRatio = '3:4';
+              break;
+          case '3:2':
+              validAspectRatio = '4:3';
+              break;
+          case '21:9':
+              validAspectRatio = '16:9';
+              break;
+          default:
+              console.warn(`Unsupported ratio ${aspectRatio}, defaulting to 1:1`);
+              validAspectRatio = '1:1';
+      }
+  }
+
+  const config: any = { imageConfig: { aspectRatio: validAspectRatio } };
+  
+  // Gemini 3 Pro Image Preview supports imageSize
+  if (actualModel === 'gemini-3-pro-image-preview') {
       config.imageConfig.imageSize = resolution;
   }
 
+  // Reforço de estilo no nível da geração
+  const enhancedPrompt = `${prompt} . Professional Photojournalism, Realistic Camera Photo, 8k, Highly Detailed, Natural Lighting.`;
+
   try {
       const response = await retryWithBackoff<GenerateContentResponse>(
-          () => ai.models.generateContent({ model: actualModel, contents: { parts: [{ text: `${prompt} . Photorealistic, 8k.` }] }, config: config }), 
+          () => ai.models.generateContent({ model: actualModel, contents: { parts: [{ text: enhancedPrompt }] }, config: config }), 
           1, // Apenas 1 retry se for imagem, pois quota não volta rápido
           4000, 
           2,
@@ -640,8 +822,8 @@ export const generateImageFromPrompt = async (prompt: string, aspectRatio: Aspec
           }
 
           // Retorna URL de placeholder profissional
-          const width = aspectRatio === '16:9' ? 1200 : 1024;
-          const height = aspectRatio === '16:9' ? 675 : 1024;
+          const width = validAspectRatio === '16:9' ? 1200 : 1024;
+          const height = validAspectRatio === '16:9' ? 675 : 1024;
           const encodedText = encodeURIComponent("Quota Exceeded - Placeholder");
           return `https://placehold.co/${width}x${height}/EEE/31343C?text=${encodedText}`;
       }

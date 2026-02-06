@@ -8,11 +8,12 @@ export default defineConfig(({ mode }) => {
   // CRÍTICO PARA NETLIFY: 
   // Durante o build no servidor, a chave está em process.env.API_KEY, não necessariamente no objeto 'env' do loadEnv.
   // Priorizamos a variável do sistema (process.env) e usamos o .env local como fallback.
-  const apiKey = process.env.API_KEY || env.API_KEY;
+  const apiKey = process.env.API_KEY || env.API_KEY || '';
 
   return {
     plugins: [react()],
     // Define a substituição global da string 'process.env.API_KEY' pelo valor real da chave
+    // O JSON.stringify é crucial para garantir que vire uma string válida no bundle
     define: {
       'process.env.API_KEY': JSON.stringify(apiKey)
     },
