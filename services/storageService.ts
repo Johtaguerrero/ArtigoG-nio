@@ -63,8 +63,22 @@ export const getArticle = (id: string): ArticleData | undefined => {
   return articles.find(a => a.id === id);
 };
 
+// HELPER: Tenta salvar e gerencia erro de cota (QuotaExceededError)
+const trySaveArticles = (articles: ArticleData[]): boolean => {
+    try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(articles));
+        return true;
+    } catch (e: any) {
+        // Detecta erro de cota do navegador (5MB limit)
+        if (e.name === 'QuotaExceededError' || e.code === 22 || e.code === 1014) {
+            return false;
+        }
+        throw e; // Outros erros
+    }
+};
+
 export const saveArticle = (article: ArticleData): void => {
-  const articles = getArticles();
+  let articles = getArticles();
   const index = articles.findIndex(a => a.id === article.id);
   
   if (index >= 0) {
@@ -73,7 +87,63 @@ export const saveArticle = (article: ArticleData): void => {
     articles.unshift(article);
   }
   
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(articles));
+  // TENTATIVA 1: Salvar normalmente
+  if (trySaveArticles(articles)) return;
+
+  console.warn("Storage Quota Exceeded. Starting cleanup strategy...");
+
+  // TENTATIVA 2: Remover imagens (base64) de TODOS os artigos EXCETO o atual
+  // Isso libera muito espaço sem perder o texto dos artigos antigos
+  articles = articles.map(a => {
+      if (a.id === article.id) return a; // Mantém o atual intacto
+      
+      // Limpa imagens dos antigos
+      if (a.imageSpecs && a.imageSpecs.length > 0) {
+          const hasBase64 = a.imageSpecs.some(img => img.url && img.url.startsWith('data:'));
+          if (hasBase64) {
+              return {
+                  ...a,
+                  imageSpecs: a.imageSpecs.map(spec => ({
+                      ...spec,
+                      url: spec.url.startsWith('data:') ? '' : spec.url // Remove apenas base64 pesado
+                  }))
+              };
+          }
+      }
+      return a;
+  });
+
+  if (trySaveArticles(articles)) {
+      console.log("Cleanup success: Removed images from older articles.");
+      return;
+  }
+
+  // TENTATIVA 3: Remover artigos mais antigos (LIFO)
+  // Mantém no máximo os 10 mais recentes se o espaço estiver crítico
+  const originalLength = articles.length;
+  while (articles.length > 5) { // Protege pelo menos 5
+      articles.pop(); // Remove o último (mais antigo)
+      if (trySaveArticles(articles)) {
+          console.log(`Cleanup success: Deleted ${originalLength - articles.length} oldest articles.`);
+          return;
+      }
+  }
+
+  // TENTATIVA 4 (Emergência): Remover imagens do PRÓPRIO artigo atual para salvar o texto
+  // É melhor salvar o texto sem imagem do que perder tudo
+  const currentIdx = articles.findIndex(a => a.id === article.id);
+  if (currentIdx >= 0 && articles[currentIdx].imageSpecs) {
+      articles[currentIdx].imageSpecs = articles[currentIdx].imageSpecs?.map(spec => ({
+          ...spec,
+          url: '' 
+      }));
+      if (trySaveArticles(articles)) {
+          alert("Aviso de Armazenamento: O limite do navegador foi atingido. As imagens deste artigo não foram salvas para preservar o texto. Faça o download das imagens antes de sair.");
+          return;
+      }
+  }
+
+  alert("Erro Crítico: Armazenamento do navegador cheio. Não foi possível salvar este artigo. Tente excluir itens manualmente da Biblioteca.");
 };
 
 export const deleteArticle = (id: string): void => {
@@ -123,7 +193,11 @@ export const saveAuthor = (author: Author): void => {
     authors.push(author);
   }
   
-  localStorage.setItem(AUTHORS_KEY, JSON.stringify(authors));
+  try {
+    localStorage.setItem(AUTHORS_KEY, JSON.stringify(authors));
+  } catch (e) {
+    alert("Não foi possível salvar o autor (Limite de armazenamento). Tente usar uma foto menor.");
+  }
 };
 
 export const deleteAuthor = (id: string): void => {

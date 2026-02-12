@@ -126,19 +126,22 @@ async function retryWithBackoff<T>(
       
     const isNetworkError = 
       error?.status === 503 || 
-      (error?.message && (error.message.includes('overloaded') || error.message.includes('fetch')));
+      (error?.message && (error.message.includes('overloaded') || error.message.includes('fetch') || error.message.includes('Empty response')));
 
-    if (isQuotaError && isImageRequest) {
-        console.warn("🚫 Cota de imagem esgotada. Ativando Circuit Breaker.");
-        GLOBAL_IMAGE_QUOTA_EXHAUSTED = true;
-        throw error; // Não faz retry se for imagem, falha rápido para usar placeholder
+    if (isQuotaError) {
+        if (isImageRequest) {
+            console.warn("🚫 Cota de API (Imagem) esgotada. Ativando Circuit Breaker.");
+            GLOBAL_IMAGE_QUOTA_EXHAUSTED = true;
+            throw new Error("Cota da API do Google (Imagens) excedida. Tente mais tarde."); 
+        }
+        // Se for texto, tenta esperar mais tempo
     }
 
     if (retries > 0 && (isQuotaError || isNetworkError)) {
       // Se for erro de cota, espera MUITO mais (30s inicial conforme pedido pela API)
       const waitTime = isQuotaError ? Math.max(delay, 30000) : delay;
       
-      console.warn(`⚠️ API Limit/Quota (${isQuotaError ? '429' : 'Network'}). Aguardando ${waitTime}ms... Tentativas restantes: ${retries}`);
+      console.warn(`⚠️ API Limit/Quota/Network (${isQuotaError ? '429' : 'Network/Empty'}). Aguardando ${waitTime}ms... Tentativas restantes: ${retries}`);
       
       await new Promise(resolve => setTimeout(resolve, waitTime));
       return retryWithBackoff(fn, retries - 1, delay * factor, factor, isImageRequest);
@@ -155,14 +158,19 @@ async function generateSmartContent(
 ): Promise<GenerateContentResponse> {
   const ai = getClient();
   const runRequest = async (targetModel: string, targetConfig: any) => {
-    return await ai.models.generateContent({ model: targetModel, contents, config: targetConfig });
+    const res = await ai.models.generateContent({ model: targetModel, contents, config: targetConfig });
+    // Validação de Resposta Vazia (comum em sobrecarga)
+    if (!res.text || res.text.trim() === '') {
+        throw new Error("Empty response from AI model");
+    }
+    return res;
   };
 
   try {
     // Tenta primeiro com o modelo principal e configurações otimizadas
     return await retryWithBackoff(() => runRequest(model, config), 2, 4000);
   } catch (error: any) {
-    const isRecoverableError = error?.status === 429 || error?.code === 429 || error?.status === 404 || error?.code === 404 || (error?.message && (error.message.includes('429') || error.message.includes('quota') || error.message.includes('RESOURCE_EXHAUSTED') || error.message.includes('NOT_FOUND'))) || error?.status === 503;
+    const isRecoverableError = error?.status === 429 || error?.code === 429 || error?.status === 404 || error?.code === 404 || (error?.message && (error.message.includes('429') || error.message.includes('quota') || error.message.includes('RESOURCE_EXHAUSTED') || error.message.includes('NOT_FOUND') || error.message.includes('Empty response'))) || error?.status === 503;
 
     if (isRecoverableError && model !== fallbackModel) {
       console.warn(`Modelo ${model} falhou ou excedeu cota. Fallback para ${fallbackModel}...`);
@@ -327,7 +335,7 @@ export const injectVideoIntoHtml = (html: string, videoData?: VideoData): string
 export const analyzeSerp = async (keyword: string, language: string = 'Português'): Promise<SerpAnalysisResult> => {
   try {
     const result = await generateSmartContent(
-        MODEL_PRIMARY_TEXT,
+        MODEL_TOOL_USE, // OPTIMIZATION: Use Flash (Tool Use) instead of Pro to save quota
         `
         ${ARTIGO_GENIO_PERSONA}
         TAREFA: Análise SERP para "${keyword}". Idioma: ${language}.
@@ -345,7 +353,7 @@ export const analyzeSerp = async (keyword: string, language: string = 'Portuguê
 export const generateArticleStructure = async (topic: string, keyword: string, serpData: SerpAnalysisResult, language: string): Promise<{ title: string; subtitle: string; lead: string }> => {
   try {
     const response = await generateSmartContent(
-      MODEL_PRIMARY_TEXT,
+      MODEL_FALLBACK_TEXT, // OPTIMIZATION: Use Flash for structure generation (fast & structured)
       `${ARTIGO_GENIO_PERSONA}\nTAREFA: Estrutura para "${topic}" / "${keyword}". Idioma: ${language}. Título MÁXIMO 7 palavras. JSON { title, subtitle, lead }.`,
       { responseMimeType: "application/json", responseSchema: { type: Type.OBJECT, properties: { title: { type: Type.STRING }, subtitle: { type: Type.STRING }, lead: { type: Type.STRING } } } }
     );
@@ -509,7 +517,7 @@ export const generateMainContent = async (
 export const generateMetadata = async (topic: string, keyword: string, htmlContent: string, language: string): Promise<SeoData> => {
     try {
         const response = await generateSmartContent(
-            MODEL_PRIMARY_TEXT,
+            MODEL_FALLBACK_TEXT, // OPTIMIZATION: Use Flash for metadata (fast)
             `Gere SEO JSON para "${topic}". 
             MetaDesc máx 156 chars (informativa). 
             SeoTitle máx 60 chars.
@@ -633,7 +641,7 @@ export const generateMediaStrategy = async (title: string, keyword: string, lang
       `;
 
       const response = await generateSmartContent(
-        MODEL_PRIMARY_TEXT,
+        MODEL_FALLBACK_TEXT, // OPTIMIZATION: Use Flash for strategy generation (fast & structured)
         prompt,
         { 
             responseMimeType: "application/json", 

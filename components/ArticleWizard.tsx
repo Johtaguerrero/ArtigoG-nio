@@ -177,13 +177,13 @@ export const ArticleWizard: React.FC = () => {
       setProgress({ step: `Analisando SERP (${article.language})...`, percentage: 10 });
       const serpData = await geminiService.analyzeSerp(article.targetKeyword, article.language);
       
-      await delay(2000); // Throttling
+      await delay(4000); // Throttling Increased
 
       // 2. Structure Generation
       setProgress({ step: 'Criando estrutura otimizada (E-E-A-T)...', percentage: 25 });
       const structure = await geminiService.generateArticleStructure(article.topic, article.targetKeyword, serpData, article.language);
       
-      await delay(3000); // Throttling mais agressivo
+      await delay(5000); // Throttling Increased
 
       // 3. Main Content Generation
       setProgress({ step: 'Escrevendo conteúdo e criando Links Internos...', percentage: 50 });
@@ -199,13 +199,13 @@ export const ArticleWizard: React.FC = () => {
         currentAuthor?.name
       );
 
-      await delay(3000); // Throttling
+      await delay(5000); // Throttling Increased
 
       // 4. Media Strategy (Video + Images)
       setProgress({ step: 'Planejando Mídia (Vídeo e Imagens SEO)...', percentage: 75 });
       const mediaData = await geminiService.generateMediaStrategy(structure.title, article.targetKeyword, article.language);
 
-      await delay(2000); // Throttling
+      await delay(4000); // Throttling Increased
 
       // AUTO HERO GENERATION - DEFAULT TO FLASH FOR SPEED
       if (mediaData.imageSpecs.length > 0) {
