@@ -383,17 +383,19 @@ export const generateMainContent = async (
         let domain = siteUrl.trim().replace(/^https?:\/\//, '');
         if (domain.endsWith('/')) domain = domain.slice(0, -1);
         
-        // --- BUSCA DE LINKS INTERNOS OTIMIZADA PARA ALEATORIEDADE E ANTIGUIDADE ---
+        // Termos randômicos para garantir diversidade nos resultados da busca
+        const searchTerms = ["dicas", "guia", "tutoriais", "notícias", "artigos", "curiosidades", "fatos", "análise", "o que é", "como funciona", "tudo sobre"];
+        const randomTerm = searchTerms[Math.floor(Math.random() * searchTerms.length)];
+
+        // --- BUSCA DE LINKS INTERNOS OTIMIZADA PARA ALEATORIEDADE E QUANTIDADE ---
         const linkSearchResponse = await generateSmartContent(
             MODEL_FALLBACK_TEXT,
-            `Task: Perform a broad site search on "${domain}" to discover various blog posts for internal linking.
+            `Task: Perform a specific site search on "${domain}" to discover distinct blog posts for internal linking.
             
-            1. Search for at least 15 valid blog post/article URLs from "site:${domain}".
-            2. TRY to find OLDER articles or random topics, not just the newest ones.
-            3. IGNORE homepage, category pages, tags, or contact pages.
+            1. Search for at least 20 valid blog post/article URLs from "site:${domain}".
+            2. Query focus: "site:${domain} ${randomTerm} OR blog".
+            3. IGNORE homepage, category pages, tags, contact pages, or login pages.
             4. Return a JSON array of objects.
-            
-            Query: "site:${domain} blog OR artigo OR dicas"
             
             Return JSON format: [{"title": "Article Title", "url": "https://${domain}/path"}]`,
             { tools: [{ googleSearch: {} }] }
@@ -424,10 +426,10 @@ export const generateMainContent = async (
 
             // --- SHUFFLE (Aleatoriedade Real) ---
             // Embaralha a lista completa antes de pegar os 3 primeiros.
-            // Isso garante que se a IA retornar 10 links, a cada geração pegaremos 3 diferentes.
+            // Isso garante que se a IA retornar links diferentes ou os mesmos, a ordem muda.
             const shuffledLinks = shuffleArray(allValidLinks);
             
-            // Pega os top 3
+            // Pega os top 3 garantidos (ou o máximo que tiver)
             const selectedLinks = shuffledLinks.slice(0, 3);
 
             if (selectedLinks.length > 0) {

@@ -1148,6 +1148,7 @@ export const ArticleWizard: React.FC = () => {
                                         </p>
                                      </div>
                                  </div>
+                                 
                                  {/* Novo Campo Resumo Viral WP */}
                                  <div className="mt-4 pt-4 border-t border-slate-100">
                                      <div className="flex justify-between items-center mb-2">
@@ -1320,7 +1321,28 @@ export const ArticleWizard: React.FC = () => {
     );
   };
 
-  if (currentStep === 1) return renderStep1();
-  if (currentStep === 2) return renderProgress();
-  return renderReview();
+  return (
+    <div className="min-h-screen bg-slate-50 pb-20">
+      <div className="container mx-auto px-4 py-8">
+        {/* Step Indicator */}
+        <div className="flex justify-center items-center mb-12 relative max-w-xl mx-auto">
+            <div className="absolute top-1/2 left-0 w-full h-1 bg-slate-200 -z-0"></div>
+            <div 
+            className="absolute top-1/2 left-0 h-1 bg-blue-500 transition-all duration-500 -z-0" 
+            style={{ width: currentStep === 1 ? '0%' : currentStep === 2 ? '50%' : '100%' }}
+            ></div>
+            
+            <div className="flex justify-between w-full">
+                <StepIndicator step={1} current={currentStep} />
+                <StepIndicator step={2} current={currentStep} />
+                <StepIndicator step={3} current={currentStep} />
+            </div>
+        </div>
+
+        {currentStep === 1 && renderStep1()}
+        {currentStep === 2 && renderProgress()}
+        {currentStep === 3 && renderReview()}
+      </div>
+    </div>
+  );
 };
