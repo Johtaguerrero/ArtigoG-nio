@@ -556,6 +556,32 @@ export const generateMetadata = async (topic: string, keyword: string, htmlConte
     }
 };
 
+export const generateRelatedTopics = async (topic: string, keyword: string): Promise<string[]> => {
+  const prompt = `
+    Gere 5 variações criativas de títulos/tópicos para um artigo sobre "${topic}" com foco na palavra-chave "${keyword}".
+    Os títulos devem ser engajadores, otimizados para SEO e cobrir diferentes ângulos (ex: Lista, Guia, Polêmica, Tutorial).
+    Retorne APENAS um array JSON de strings.
+  `;
+  
+  try {
+      const response = await generateSmartContent(
+          MODEL_FALLBACK_TEXT,
+          prompt,
+          {
+              responseMimeType: "application/json",
+              responseSchema: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING }
+              }
+          }
+      );
+      return cleanAndParseJSON(response.text);
+  } catch (e) {
+      console.error("Error generating related topics", e);
+      return [];
+  }
+};
+
 export const generateMediaStrategy = async (title: string, keyword: string, language: string): Promise<{ videoData: VideoData | undefined, imageSpecs: ImageSpec[] }> => {
   // FALLBACK FUNCTION: Creates default photojournalism specs if AI fails
   const createFallbackSpecs = (baseTitle: string): ImageSpec[] => [
