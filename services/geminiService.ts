@@ -317,19 +317,58 @@ export const injectVideoIntoHtml = (html: string, videoData?: VideoData): string
   ${videoData.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoData.caption}</p>` : ''}
 </div><!-- video-end -->`;
 
-    let cleanHtml = html.replace(/<div id="featured-video-container"[\s\S]*?<!-- video-end -->/g, '');
+    // 1. Limpa vídeo existente
+    let content = html.replace(/<div id="featured-video-container"[\s\S]*?<!-- video-end -->/g, '');
 
-    const leadCloseIndex = cleanHtml.indexOf('</p>');
-    if (leadCloseIndex !== -1) {
-        return cleanHtml.slice(0, leadCloseIndex + 4) + "\n" + videoSection + cleanHtml.slice(leadCloseIndex + 4);
-    }
+    // 2. Extrai e remove o Sumário (TOC) temporariamente
+    // RegEx busca <nav class="toc"> ou <div class="toc">
+    const tocRegex = /<(nav|div)[^>]*class=["'](?:\w+\s+)*toc(?:\s+\w+)*["'][^>]*>[\s\S]*?<\/\1>/i;
+    const tocMatch = content.match(tocRegex);
+    let tocHtml = '';
     
-    const h1CloseIndex = cleanHtml.indexOf('</h1>');
-    if (h1CloseIndex !== -1) {
-        return cleanHtml.slice(0, h1CloseIndex + 5) + "\n" + videoSection + cleanHtml.slice(h1CloseIndex + 5);
+    if (tocMatch) {
+        tocHtml = tocMatch[0];
+        content = content.replace(tocMatch[0], '');
     }
 
-    return videoSection + "\n" + cleanHtml;
+    // 3. Encontra ponto de inserção do Vídeo (após o Lead/primeiro parágrafo)
+    const leadCloseIndex = content.indexOf('</p>');
+    let videoInserted = false;
+    
+    if (leadCloseIndex !== -1) {
+        // Insere após o primeiro </p>
+        const insertionPoint = leadCloseIndex + 4;
+        content = content.slice(0, insertionPoint) + "\n" + videoSection + content.slice(insertionPoint);
+        videoInserted = true;
+    } else {
+        // Fallback: Tenta inserir após o H1
+        const h1CloseIndex = content.indexOf('</h1>');
+        if (h1CloseIndex !== -1) {
+             const insertionPoint = h1CloseIndex + 5;
+             content = content.slice(0, insertionPoint) + "\n" + videoSection + content.slice(insertionPoint);
+             videoInserted = true;
+        } else {
+             // Fallback final: No topo
+             content = videoSection + "\n" + content;
+             videoInserted = true;
+        }
+    }
+
+    // 4. Reinsere o Sumário (TOC) IMEDIATAMENTE após o vídeo
+    if (tocHtml) {
+        const videoEndMarker = '<!-- video-end -->';
+        const videoEndIndex = content.indexOf(videoEndMarker);
+        
+        if (videoEndIndex !== -1) {
+             const insertionPoint = videoEndIndex + videoEndMarker.length;
+             content = content.slice(0, insertionPoint) + "\n" + tocHtml + content.slice(insertionPoint);
+        } else {
+            // Se por algum motivo o vídeo não foi achado (segurança), coloca o TOC no topo ou onde estava
+            content = tocHtml + "\n" + content;
+        }
+    }
+
+    return content;
 };
 
 export const analyzeSerp = async (keyword: string, language: string = 'Português'): Promise<SerpAnalysisResult> => {
