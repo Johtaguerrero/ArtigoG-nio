@@ -95,7 +95,7 @@ const cleanAndParseJSON = (text: string | undefined): any => {
     try {
         return JSON.parse(cleanText);
     } catch (e) {
-        console.error("Falha ao fazer parse do JSON.", text);
+        console.error("Falha ao fazer parse do JSON.", cleanText.substring(0, 200) + "...");
         throw new Error("A resposta da IA não é um JSON válido. Tente novamente.");
     }
 };
@@ -611,7 +611,7 @@ export const generateMediaStrategy = async (title: string, keyword: string, lang
 
       PART 1: YOUTUBE STRATEGY
       Do NOT access YouTube directly. Generate a 'youtube' object with:
-      - search_query: Ideal search term for external system (Video).
+      - search_query: A specific, short keyword phrase to find a video (Max 6 words). Example: "Future of AI 2024". Do NOT include language codes.
       - criteria: { language, min_views, max_duration }
       - embed_template: "https://www.youtube-nocookie.com/embed/{{VIDEO_ID}}"
       
@@ -646,6 +646,7 @@ export const generateMediaStrategy = async (title: string, keyword: string, lang
         MODEL_FALLBACK_TEXT, // OPTIMIZATION: Use Flash for strategy generation (fast & structured)
         prompt,
         { 
+            temperature: 0.3, // Reduced temperature to prevent hallucinations/loops
             responseMimeType: "application/json", 
             responseSchema: { 
                 type: Type.OBJECT, 
