@@ -84,10 +84,6 @@ export const ArticleWizard: React.FC = () => {
   const [editPrompt, setEditPrompt] = useState("");
   const [isEditingImage, setIsEditingImage] = useState(false);
 
-  // Related Topics State
-  const [relatedTopics, setRelatedTopics] = useState<string[]>([]);
-  const [isGeneratingIdeas, setIsGeneratingIdeas] = useState(false);
-
   // Article State initialized with safe ID generator
   const [article, setArticle] = useState<ArticleData>({
     id: generateId(),
@@ -162,23 +158,6 @@ export const ArticleWizard: React.FC = () => {
     const settings = getSettings();
     settings.defaultSiteUrl = newUrl;
     saveSettings(settings);
-  };
-
-  const handleGenerateIdeas = async () => {
-    if (!article.topic && !article.targetKeyword) {
-        alert("Preencha o tópico ou a palavra-chave primeiro para receber sugestões.");
-        return;
-    }
-    setIsGeneratingIdeas(true);
-    try {
-        const ideas = await geminiService.generateRelatedTopics(article.topic || article.targetKeyword, article.targetKeyword || article.topic);
-        setRelatedTopics(ideas);
-    } catch (e: any) {
-        console.error(e);
-        alert("Erro ao gerar ideias: " + parseErrorMessage(e));
-    } finally {
-        setIsGeneratingIdeas(false);
-    }
   };
 
   const handleGenerate = async () => {
@@ -532,39 +511,6 @@ export const ArticleWizard: React.FC = () => {
                 <BarChart2 size={16} />
               </span>
             </div>
-          </div>
-          
-          {/* Related Topics Generator */}
-          <div className="bg-indigo-50 p-4 rounded-lg border border-indigo-100 mt-4 mb-4">
-              <div className="flex justify-between items-center mb-3">
-                  <h3 className="text-sm font-bold text-indigo-900 flex items-center gap-2">
-                      <Lightbulb size={16} className="text-yellow-600" /> Ideias de Tópicos
-                  </h3>
-                  <button 
-                      onClick={handleGenerateIdeas}
-                      disabled={isGeneratingIdeas || (!article.topic && !article.targetKeyword)}
-                      className="text-xs bg-white text-indigo-600 px-3 py-1.5 rounded-lg border border-indigo-200 font-bold hover:bg-indigo-50 flex items-center gap-1 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition"
-                  >
-                       {isGeneratingIdeas ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                       Gerar Ideias
-                  </button>
-              </div>
-              
-              {!article.topic && !article.targetKeyword && (
-                  <p className="text-xs text-indigo-400 mb-2">Preencha o tópico ou palavra-chave para receber sugestões.</p>
-              )}
-
-              <div className="flex flex-wrap gap-2">
-                  {relatedTopics.map((idea, idx) => (
-                      <button
-                          key={idx}
-                          onClick={() => setArticle({...article, topic: idea})}
-                          className="text-xs bg-white text-slate-700 px-3 py-2 rounded-lg border border-indigo-100 hover:border-indigo-400 hover:text-indigo-800 transition shadow-sm text-left active:scale-95"
-                      >
-                          {idea}
-                      </button>
-                  ))}
-              </div>
           </div>
 
           <div>

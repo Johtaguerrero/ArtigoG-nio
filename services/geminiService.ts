@@ -317,58 +317,19 @@ export const injectVideoIntoHtml = (html: string, videoData?: VideoData): string
   ${videoData.caption ? `<p class="text-sm text-slate-500 mt-2 italic">${videoData.caption}</p>` : ''}
 </div><!-- video-end -->`;
 
-    // 1. Limpa vídeo existente
-    let content = html.replace(/<div id="featured-video-container"[\s\S]*?<!-- video-end -->/g, '');
+    let cleanHtml = html.replace(/<div id="featured-video-container"[\s\S]*?<!-- video-end -->/g, '');
 
-    // 2. Extrai e remove o Sumário (TOC) temporariamente
-    // RegEx busca <nav class="toc"> ou <div class="toc">
-    const tocRegex = /<(nav|div)[^>]*class=["'](?:\w+\s+)*toc(?:\s+\w+)*["'][^>]*>[\s\S]*?<\/\1>/i;
-    const tocMatch = content.match(tocRegex);
-    let tocHtml = '';
-    
-    if (tocMatch) {
-        tocHtml = tocMatch[0];
-        content = content.replace(tocMatch[0], '');
-    }
-
-    // 3. Encontra ponto de inserção do Vídeo (após o Lead/primeiro parágrafo)
-    const leadCloseIndex = content.indexOf('</p>');
-    let videoInserted = false;
-    
+    const leadCloseIndex = cleanHtml.indexOf('</p>');
     if (leadCloseIndex !== -1) {
-        // Insere após o primeiro </p>
-        const insertionPoint = leadCloseIndex + 4;
-        content = content.slice(0, insertionPoint) + "\n" + videoSection + content.slice(insertionPoint);
-        videoInserted = true;
-    } else {
-        // Fallback: Tenta inserir após o H1
-        const h1CloseIndex = content.indexOf('</h1>');
-        if (h1CloseIndex !== -1) {
-             const insertionPoint = h1CloseIndex + 5;
-             content = content.slice(0, insertionPoint) + "\n" + videoSection + content.slice(insertionPoint);
-             videoInserted = true;
-        } else {
-             // Fallback final: No topo
-             content = videoSection + "\n" + content;
-             videoInserted = true;
-        }
+        return cleanHtml.slice(0, leadCloseIndex + 4) + "\n" + videoSection + cleanHtml.slice(leadCloseIndex + 4);
+    }
+    
+    const h1CloseIndex = cleanHtml.indexOf('</h1>');
+    if (h1CloseIndex !== -1) {
+        return cleanHtml.slice(0, h1CloseIndex + 5) + "\n" + videoSection + cleanHtml.slice(h1CloseIndex + 5);
     }
 
-    // 4. Reinsere o Sumário (TOC) IMEDIATAMENTE após o vídeo
-    if (tocHtml) {
-        const videoEndMarker = '<!-- video-end -->';
-        const videoEndIndex = content.indexOf(videoEndMarker);
-        
-        if (videoEndIndex !== -1) {
-             const insertionPoint = videoEndIndex + videoEndMarker.length;
-             content = content.slice(0, insertionPoint) + "\n" + tocHtml + content.slice(insertionPoint);
-        } else {
-            // Se por algum motivo o vídeo não foi achado (segurança), coloca o TOC no topo ou onde estava
-            content = tocHtml + "\n" + content;
-        }
-    }
-
-    return content;
+    return videoSection + "\n" + cleanHtml;
 };
 
 export const analyzeSerp = async (keyword: string, language: string = 'Português'): Promise<SerpAnalysisResult> => {
@@ -593,32 +554,6 @@ export const generateMetadata = async (topic: string, keyword: string, htmlConte
     } catch (e) { 
         return { seoTitle: keyword, metaDescription: `Artigo sobre ${keyword}`, slug: keyword.replace(/ /g, '-'), targetKeyword: keyword, synonyms: [], relatedKeyphrase: "", tags: [], lsiKeywords: [], opportunities: { featuredSnippet: "", paa: [], googleNews: "" } };
     }
-};
-
-export const generateRelatedTopics = async (topic: string, keyword: string): Promise<string[]> => {
-  const prompt = `
-    Gere 5 variações criativas de títulos/tópicos para um artigo sobre "${topic}" com foco na palavra-chave "${keyword}".
-    Os títulos devem ser engajadores, otimizados para SEO e cobrir diferentes ângulos (ex: Lista, Guia, Polêmica, Tutorial).
-    Retorne APENAS um array JSON de strings.
-  `;
-  
-  try {
-      const response = await generateSmartContent(
-          MODEL_FALLBACK_TEXT,
-          prompt,
-          {
-              responseMimeType: "application/json",
-              responseSchema: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
-              }
-          }
-      );
-      return cleanAndParseJSON(response.text);
-  } catch (e) {
-      console.error("Error generating related topics", e);
-      return [];
-  }
 };
 
 export const generateMediaStrategy = async (title: string, keyword: string, language: string): Promise<{ videoData: VideoData | undefined, imageSpecs: ImageSpec[] }> => {
